@@ -3,6 +3,7 @@
 # PURPOSE: 3-Agent Pipeline with Human-in-the-Loop
 #          + Selective re-run from any step
 #          + Snowflake persistence
+#          + GitHub push for every run output
 # DEPLOY: Streamlit in Snowflake
 # ============================================================
 
@@ -173,6 +174,94 @@ def get_all_runs() -> list:
         """).collect()
     except Exception:
         return []
+
+
+# ══════════════════════════════════════════════════════════════
+# GITHUB PUSH
+# ══════════════════════════════════════════════════════════════
+
+def push_output_to_github(
+    run_id: str,
+    filename: str,
+    content: str,
+    commit_message: str
+):
+    """Push a run output file to GitHub under runs/RUN_ID/."""
+    safe_content = content.replace("'", "''")
+    safe_msg     = commit_message.replace("'", "''")
+    file_path    = f"runs/{run_id}/{filename}"
+
+    try:
+        result = session.sql(f"""
+            CALL {DATABASE}.{SCHEMA}.SP_PUSH_TO_GITHUB(
+                '{file_path}',
+                '{safe_content[:50000]}',
+                '{safe_msg}'
+            )
+        """).collect()
+
+        response = result[0][0] if result else ""
+        if "SUCCESS" in str(response):
+            return True
+        else:
+            st.warning(
+                f"⚠️ GitHub push warning: {response}. "
+                f"Output still saved to Snowflake."
+            )
+            return False
+    except Exception as e:
+        st.warning(
+            f"⚠️ Could not push to GitHub: {str(e)[:100]}. "
+            f"Output saved to Snowflake only."
+        )
+        return False
+
+
+def push_run_summary(run_id: str):
+    """Push a summary file when pipeline completes."""
+    s         = st.session_state
+    confirmed = s.get("confirmed_tables", {})
+
+    ftl = "\n".join(
+        f"- `{t}`" for t in confirmed.get("ftl", [])
+    )
+    pi = "\n".join(
+        f"- `{t}`" for t in confirmed.get("pi", [])
+    )
+
+    summary = f"""# Run: {run_id}
+
+**Date:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+## Tables
+**FTL Source:**
+{ftl}
+
+**PI Target:**
+{pi}
+
+## Outputs
+| Output | Status |
+|--------|--------|
+| Mapping Report | {'✅' if s.get('mapping_report') else '—'} |
+| Mapping CSV    | {'✅' if s.get('mapping_csv')    else '—'} |
+| Silver Model   | {'✅' if s.get('silver_output')  else '—'} |
+| Gold Model     | {'✅' if s.get('gold_output')    else '—'} |
+| Test Suite     | {'✅' if s.get('test_output')    else '—'} |
+
+## Approvals
+| Stage | Status |
+|-------|--------|
+| Mapping | {'✅ Approved' if s.get('approved_csv')   else '⏳ Pending'} |
+| DBT     | {'✅ Approved' if s.get('approved_dbt')   else '⏳ Pending'} |
+| Tests   | {'✅ Approved' if s.get('approved_tests') else '⏳ Pending'} |
+"""
+    push_output_to_github(
+        run_id,
+        "run_summary.md",
+        summary,
+        f"run({run_id}): pipeline complete"
+    )
 
 
 # ══════════════════════════════════════════════════════════════
@@ -394,7 +483,7 @@ with st.sidebar:
         if selected_key:
             st.info(step_descriptions[selected_key])
             if st.button(
-                f"🔁 Confirm Re-run",
+                "🔁 Confirm Re-run",
                 type="primary",
                 key="confirm_rerun"
             ):
@@ -628,9 +717,9 @@ if not tables_confirmed:
             st.rerun()
 
 else:
-    confirmed      = st.session_state["confirmed_tables"]
-    ftl_str = "\n".join(f"  - {t}" for t in confirmed["ftl"])
-    pi_str  = "\n".join(f"  - {t}" for t in confirmed["pi"])
+    confirmed = st.session_state["confirmed_tables"]
+    ftl_str   = "\n".join(f"  - {t}" for t in confirmed["ftl"])
+    pi_str    = "\n".join(f"  - {t}" for t in confirmed["pi"])
 
     st.success("✅ Tables confirmed")
     c1, c2 = st.columns(2)
@@ -668,6 +757,21 @@ else:
                 if csv_t:
                     st.session_state["mapping_csv"] = csv_t
                 save_run(active_run_id)
+
+                # Push to GitHub
+                push_output_to_github(
+                    active_run_id,
+                    "mapping_report.md",
+                    result,
+                    f"run({active_run_id}): mapping report"
+                )
+                if csv_t:
+                    push_output_to_github(
+                        active_run_id,
+                        "mapping_csv.csv",
+                        csv_t,
+                        f"run({active_run_id}): mapping CSV"
+                    )
                 st.rerun()
     else:
         st.success("✅ Mapping Analysis Complete")
@@ -814,6 +918,14 @@ else:
                     """)
                     st.session_state["silver_output"] = result
                     save_run(active_run_id)
+
+                    # Push to GitHub
+                    push_output_to_github(
+                        active_run_id,
+                        "silver_model.md",
+                        result,
+                        f"run({active_run_id}): silver model"
+                    )
                     st.rerun()
         else:
             st.success("✅ Silver Model Generated")
@@ -884,6 +996,14 @@ else:
                             + "\n\n---\n\n" + result
                         )
                         save_run(active_run_id)
+
+                        # Push to GitHub
+                        push_output_to_github(
+                            active_run_id,
+                            "gold_model.md",
+                            result,
+                            f"run({active_run_id}): gold model"
+                        )
                         st.rerun()
             else:
                 st.success("✅ Gold Model Generated")
@@ -984,6 +1104,14 @@ else:
                     """)
                     st.session_state["test_output"] = result
                     save_run(active_run_id)
+
+                    # Push to GitHub
+                    push_output_to_github(
+                        active_run_id,
+                        "test_suite.md",
+                        result,
+                        f"run({active_run_id}): test suite"
+                    )
                     st.rerun()
         else:
             st.success("✅ Test Suite Generated")
@@ -1022,6 +1150,9 @@ else:
                     st.session_state["approved_tests"] = \
                         st.session_state["test_output"]
                     save_run(active_run_id)
+
+                    # Push run summary to GitHub
+                    push_run_summary(active_run_id)
                     st.rerun()
             with cr3:
                 st.markdown("**🔄 Option 2 — Upload modified**")
@@ -1051,7 +1182,8 @@ else:
         with c4: st.metric("Tests",   "✅")
         st.info(
             f"Saved as `{active_run_id}`. "
-            f"Reload anytime from Run History in sidebar."
+            f"Reload anytime from Run History in sidebar. "
+            f"Outputs pushed to GitHub under `runs/{active_run_id}/`."
         )
         st.markdown("""
 **Next Steps:**
