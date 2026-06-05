@@ -4,6 +4,7 @@
 #          + Selective re-run from any step
 #          + Snowflake persistence
 #          + GitHub push for every run output
+#          + Cost summary after pipeline completes
 # DEPLOY: Streamlit in Snowflake
 # ============================================================
 
@@ -265,12 +266,218 @@ def push_run_summary(run_id: str):
 
 
 # ══════════════════════════════════════════════════════════════
-# HELPERS
+# COST SUMMARY
 # ══════════════════════════════════════════════════════════════
 
+def show_cost_summary():
+    """
+    Show real-time per-run cost summary using:
+    1. Agent call log tracked during this session (immediate)
+    2. QUERY_HISTORY for Snowflake credit usage (near real-time, ~minutes)
+    3. ACCOUNT_USAGE as fallback (up to 3hr latency)
+    """
+    st.divider()
+    st.header("💰 Run Cost Summary")
+
+    call_log  = st.session_state.get("agent_call_log", [])
+    run_start = st.session_state.get("run_start_time", datetime.now())
+    run_id    = st.session_state.get("active_run_id", "UNKNOWN")
+
+    # ── Section 1: Agent timing (always available immediately) ──
+    if call_log:
+        st.subheader("⏱️ Agent Execution Times")
+        st.caption("Recorded live during this run")
+
+        total_duration = sum(c["duration_s"] for c in call_log)
+        total_calls    = len(call_log)
+
+        m1, m2 = st.columns(2)
+        with m1:
+            st.metric("Total Agent Calls", total_calls)
+        with m2:
+            st.metric(
+                "Total Execution Time",
+                f"{total_duration:.1f}s "
+                f"({total_duration/60:.1f} min)"
+            )
+
+        # Per-call breakdown table
+        import pandas as pd
+        df_log = pd.DataFrame(call_log)
+        df_log.columns = [
+            "Agent", "Start", "End",
+            "Duration (s)", "Output Chars"
+        ]
+        st.dataframe(df_log, use_container_width=True)
+
+        # Per-agent summary
+        st.markdown("**By Agent:**")
+        summary_df = df_log.groupby("Agent").agg(
+            Calls        = ("Duration (s)", "count"),
+            Total_Dur_s  = ("Duration (s)", "sum"),
+            Avg_Dur_s    = ("Duration (s)", "mean")
+        ).reset_index()
+        st.dataframe(summary_df, use_container_width=True)
+
+    else:
+        st.info("No agent calls recorded for this run yet.")
+
+    st.divider()
+
+    # ── Section 2: Snowflake credits from QUERY_HISTORY ─────────
+    st.subheader("🔢 Snowflake Credit Usage")
+    st.caption(
+        "From `SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY` — "
+        "near real-time (few minutes delay)"
+    )
+
+    try:
+        run_start_str = run_start.strftime("%Y-%m-%d %H:%M:%S")
+
+        qh_df = session.sql(f"""
+            SELECT
+                QUERY_TEXT,
+                START_TIME,
+                END_TIME,
+                TOTAL_ELAPSED_TIME / 1000        AS DURATION_SEC,
+                CREDITS_USED_CLOUD_SERVICES      AS CREDITS,
+                EXECUTION_STATUS
+            FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+            WHERE START_TIME >= '{run_start_str}'::TIMESTAMP_NTZ
+              AND EXECUTION_STATUS = 'SUCCESS'
+              AND (
+                  QUERY_TEXT ILIKE '%DATA_AGENT_RUN%'
+                  OR QUERY_TEXT ILIKE '%{AGENT_1}%'
+                  OR QUERY_TEXT ILIKE '%{AGENT_2}%'
+                  OR QUERY_TEXT ILIKE '%{AGENT_3}%'
+              )
+            ORDER BY START_TIME
+        """).to_pandas()
+
+        if not qh_df.empty:
+            total_credits = qh_df["CREDITS"].sum()
+            total_dur     = qh_df["DURATION_SEC"].sum()
+
+            m1, m2 = st.columns(2)
+            with m1:
+                st.metric(
+                    "Total Credits Used",
+                    f"{total_credits:.6f}"
+                )
+            with m2:
+                st.metric(
+                    "Total Query Time",
+                    f"{total_dur:.1f}s"
+                )
+
+            with st.expander(
+                "📋 Query-level breakdown", expanded=False
+            ):
+                st.dataframe(
+                    qh_df[[
+                        "START_TIME", "DURATION_SEC",
+                        "CREDITS", "QUERY_TEXT"
+                    ]].assign(
+                        QUERY_TEXT=qh_df["QUERY_TEXT"].str[:80]
+                    ),
+                    use_container_width=True
+                )
+
+            # Build cost summary for GitHub push
+            cost_md = f"""# Cost Summary: {run_id}
+
+**Date:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+**Run Start:** {run_start_str}
+
+## Execution Times
+| Agent | Calls | Total (s) | Avg (s) |
+"""
+            if call_log:
+                import pandas as pd
+                df_log = pd.DataFrame(call_log)
+                for agent in df_log["agent"].unique():
+                    rows = df_log[df_log["agent"] == agent]
+                    cost_md += (
+                        f"| {agent} | {len(rows)} | "
+                        f"{rows['duration_s'].sum():.1f} | "
+                        f"{rows['duration_s'].mean():.1f} |\n"
+                    )
+
+            cost_md += f"""
+## Snowflake Credits
+| Metric | Value |
+|--------|-------|
+| Total Credits | {total_credits:.6f} |
+| Total Query Time | {total_dur:.1f}s |
+"""
+            push_output_to_github(
+                run_id,
+                "cost_summary.md",
+                cost_md,
+                f"run({run_id}): cost summary"
+            )
+
+        else:
+            st.info(
+                "ℹ️ Query history not yet available. "
+                "Try refreshing in a few minutes."
+            )
+
+    except Exception as e:
+        st.warning(
+            f"⚠️ Could not fetch query history: {str(e)[:200]}"
+        )
+
+    st.divider()
+
+    # ── Section 3: ACCOUNT_USAGE fallback ───────────────────────
+    with st.expander(
+        "📊 Full Token Usage (ACCOUNT_USAGE — up to 3hr delay)",
+        expanded=False
+    ):
+        st.caption(
+            "If this is empty, check back in a few hours. "
+            "This data is more detailed but has latency."
+        )
+        try:
+            au_df = session.sql(f"""
+                SELECT
+                    AGENT_NAME,
+                    START_TIME,
+                    END_TIME,
+                    TOKENS,
+                    TOKEN_CREDITS
+                FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_AGENT_USAGE_HISTORY
+                WHERE AGENT_DATABASE_NAME = '{DATABASE}'
+                  AND AGENT_SCHEMA_NAME   = '{SCHEMA}'
+                  AND AGENT_NAME IN (
+                      '{AGENT_1}', '{AGENT_2}', '{AGENT_3}'
+                  )
+                  AND START_TIME >= '{run_start_str}'::TIMESTAMP_NTZ
+                ORDER BY START_TIME
+            """).to_pandas()
+
+            if not au_df.empty:
+                st.dataframe(au_df, use_container_width=True)
+                st.metric(
+                    "Total Token Credits",
+                    f"{au_df['TOKEN_CREDITS'].sum():.6f}"
+                )
+                st.metric(
+                    "Total Tokens",
+                    f"{int(au_df['TOKENS'].sum()):,}"
+                )
+            else:
+                st.info("No data yet — check back in a few hours.")
+
+        except Exception as e:
+            st.warning(f"Could not fetch: {str(e)[:150]}")
+
+
 def call_agent(agent_name: str, message: str) -> str:
-    fqn = f"{DATABASE}.{SCHEMA}.{agent_name}"
-    body = json.dumps({
+    """Call agent and track timing + token usage for cost reporting."""
+    fqn       = f"{DATABASE}.{SCHEMA}.{agent_name}"
+    body      = json.dumps({
         "messages": [{"role": "user",
                       "content": [{"type": "text",
                                    "text": message}]}],
@@ -278,12 +485,30 @@ def call_agent(agent_name: str, message: str) -> str:
     })
     sql = (f"SELECT SNOWFLAKE.CORTEX.DATA_AGENT_RUN("
            f"'{fqn}', $${body}$$) AS RESPONSE")
-    result   = session.sql(sql).collect()
-    response = json.loads(result[0]["RESPONSE"])
-    return "".join(
+
+    call_start = datetime.now()
+    result     = session.sql(sql).collect()
+    call_end   = datetime.now()
+    duration_s = (call_end - call_start).total_seconds()
+
+    response  = json.loads(result[0]["RESPONSE"])
+    full_text = "".join(
         i.get("text", "") for i in response.get("content", [])
         if i.get("type") == "text"
     )
+
+    # Track call in session state for per-run cost summary
+    call_log = st.session_state.get("agent_call_log", [])
+    call_log.append({
+        "agent":      agent_name,
+        "start":      call_start.strftime("%H:%M:%S"),
+        "end":        call_end.strftime("%H:%M:%S"),
+        "duration_s": round(duration_s, 1),
+        "chars_out":  len(full_text)
+    })
+    st.session_state["agent_call_log"] = call_log
+
+    return full_text
 
 
 def trim(text: str, limit: int = 8000) -> str:
@@ -363,16 +588,6 @@ def fqn(db, schema, table):
 # ══════════════════════════════════════════════════════════════
 
 def reset_from_step(step: str):
-    """
-    Clear all outputs FROM a given step onwards.
-    Earlier steps are preserved exactly as they were.
-
-    step options:
-      'step1'  — clears everything (full re-run)
-      'step2a' — keeps mapping, re-runs Silver onwards
-      'step2b' — keeps mapping + Silver, re-runs Gold onwards
-      'step3'  — keeps mapping + DBT, re-runs Tests only
-    """
     clear_map = {
         "step1": [
             "mapping_report", "mapping_csv", "approved_csv",
@@ -415,6 +630,9 @@ if "active_run_id" not in st.session_state:
     st.session_state["active_run_id"] = (
         "RUN_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     )
+    # Record run start time for cost tracking
+    st.session_state["run_start_time"] = datetime.now()
+
 active_run_id = st.session_state["active_run_id"]
 
 st.title("🔷 Medallion Pipeline Rebuild Orchestrator")
@@ -448,7 +666,6 @@ with st.sidebar:
 **Review 3** — {'✅ Approved' if tests_approved else ('⏳ Pending' if step3_done else '🔒')}
     """)
 
-    # ── Re-run from step ───────────────────────────────────────
     if step1_done:
         st.divider()
         st.markdown("**🔁 Re-run from Step**")
@@ -473,10 +690,10 @@ with st.sidebar:
         )
 
         step_descriptions = {
-            "step1": "⚠️ This will clear the mapping report, all DBT code, and all tests. The approved CSV, table selection, and run history are preserved.",
-            "step2a": "ℹ️ This will clear the Silver model, Gold model, DBT approval, and tests. The approved mapping CSV is preserved and will be used again.",
-            "step2b": "ℹ️ This will clear only the Gold model, DBT approval, and tests. The Silver model and approved mapping are preserved.",
-            "step3": "ℹ️ This will clear only the test suite. The mapping, Silver model, and Gold model are all preserved."
+            "step1": "⚠️ Clears mapping, DBT, and tests. Table selection preserved.",
+            "step2a": "ℹ️ Clears Silver, Gold, DBT approval, and tests. Approved mapping preserved.",
+            "step2b": "ℹ️ Clears Gold, DBT approval, and tests. Silver and mapping preserved.",
+            "step3": "ℹ️ Clears only the test suite. All other outputs preserved."
         }
 
         selected_key = rerun_options.get(selected_rerun)
@@ -497,7 +714,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Run history ────────────────────────────────────────────
     st.header("📂 Run History")
     all_runs = get_all_runs()
     if all_runs:
@@ -758,17 +974,14 @@ else:
                     st.session_state["mapping_csv"] = csv_t
                 save_run(active_run_id)
 
-                # Push to GitHub
                 push_output_to_github(
-                    active_run_id,
-                    "mapping_report.md",
+                    active_run_id, "mapping_report.md",
                     result,
                     f"run({active_run_id}): mapping report"
                 )
                 if csv_t:
                     push_output_to_github(
-                        active_run_id,
-                        "mapping_csv.csv",
+                        active_run_id, "mapping_csv.csv",
                         csv_t,
                         f"run({active_run_id}): mapping CSV"
                     )
@@ -783,7 +996,6 @@ else:
             "ftl_mapping_report.md", "text/markdown"
         )
 
-        # ── auto-extract CSV ───────────────────────────────────
         if not st.session_state.get("mapping_csv"):
             csv_t = extract_csv(st.session_state["mapping_report"])
             if csv_t:
@@ -919,10 +1131,8 @@ else:
                     st.session_state["silver_output"] = result
                     save_run(active_run_id)
 
-                    # Push to GitHub
                     push_output_to_github(
-                        active_run_id,
-                        "silver_model.md",
+                        active_run_id, "silver_model.md",
                         result,
                         f"run({active_run_id}): silver model"
                     )
@@ -997,10 +1207,8 @@ else:
                         )
                         save_run(active_run_id)
 
-                        # Push to GitHub
                         push_output_to_github(
-                            active_run_id,
-                            "gold_model.md",
+                            active_run_id, "gold_model.md",
                             result,
                             f"run({active_run_id}): gold model"
                         )
@@ -1105,10 +1313,8 @@ else:
                     st.session_state["test_output"] = result
                     save_run(active_run_id)
 
-                    # Push to GitHub
                     push_output_to_github(
-                        active_run_id,
-                        "test_suite.md",
+                        active_run_id, "test_suite.md",
                         result,
                         f"run({active_run_id}): test suite"
                     )
@@ -1151,7 +1357,6 @@ else:
                         st.session_state["test_output"]
                     save_run(active_run_id)
 
-                    # Push run summary to GitHub
                     push_run_summary(active_run_id)
                     st.rerun()
             with cr3:
@@ -1172,6 +1377,9 @@ else:
                         save_run(active_run_id)
                         st.rerun()
 
+    # ══════════════════════════════════════════════════════════
+    # PIPELINE COMPLETE + COST SUMMARY
+    # ══════════════════════════════════════════════════════════
     if tests_approved:
         st.divider()
         st.success("🎉 Pipeline Complete — All Stages Approved")
@@ -1183,7 +1391,8 @@ else:
         st.info(
             f"Saved as `{active_run_id}`. "
             f"Reload anytime from Run History in sidebar. "
-            f"Outputs pushed to GitHub under `runs/{active_run_id}/`."
+            f"Outputs pushed to GitHub under "
+            f"`runs/{active_run_id}/`."
         )
         st.markdown("""
 **Next Steps:**
@@ -1200,3 +1409,6 @@ else:
 11. Share GAP report with BDP
 12. `regression_suite.sql` after every model change
         """)
+
+        # ── Cost Summary ───────────────────────────────────────
+        show_cost_summary()
