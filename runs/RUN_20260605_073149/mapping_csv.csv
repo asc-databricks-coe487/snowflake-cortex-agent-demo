@@ -1,0 +1,75 @@
+FTL_Bronze_Column,FTL_Data_Type,PI_Silver_Column,PI_Silver_Table,PI_Gold_Column,PI_Gold_Table,Classification,Confidence,Mapping_Reason,BR_ID,GAP_ID,Transformation,Notes
+ZCC_ACCOUNT_ID,TEXT,—,—,—,—,NEW_CAPABILITY,High,FTL provides ZCC-specific account identifier not present in any PI Silver schema,—,—,None,New dimension available for enrichment
+ACCOUNT_ID,TEXT,ACCOUNT_ID,SLV_ACCT_FIRST_ACTIVE,—,—,DIRECT_MATCH,High,Column name and data type identical; distinct values confirmed via profile query,—,—,None,Primary key match
+ACCOUNT_ID,TEXT,ACCOUNT_ID,SLV_COMBINED_CHANNELS,—,—,DIRECT_MATCH,High,Column name and data type identical; used as dimension in engagement tracking,—,—,None,Dimension match
+ACCOUNT_ID,TEXT,ACCOUNT_ID,SLV_CONSOLIDATED_USAGE,—,—,DIRECT_MATCH,High,Column name and data type identical; aggregation key,—,—,None,Aggregation key
+ACCOUNT_ID,TEXT,ACCOUNT_ID,SLV_DAILY_METRICS,—,—,DIRECT_MATCH,High,Column name and data type identical; aggregation key,—,—,None,Aggregation key
+ACCOUNT_ID,TEXT,ACCOUNT_ID,SLV_MONTHLY_METRICS,—,—,DIRECT_MATCH,High,Column name and data type identical; aggregation key,—,—,None,Aggregation key
+ACCOUNT_ID,TEXT,ACCOUNT_ID,SLV_ROLL_29_DAY_USAGE,—,—,DIRECT_MATCH,High,Column name and data type identical; aggregation key,—,—,None,Aggregation key
+ACCOUNT_ID,TEXT,ACCOUNT_ID,SLV_USAGE_MASTER,—,—,DIRECT_MATCH,High,Column name and data type identical; dimension key,—,—,None,Dimension key
+ACCOUNT_ID,TEXT,ACCOUNT_ID,SLV_USER_ACTIVE_DAYS,—,—,DIRECT_MATCH,High,Column name and data type identical; aggregation key,—,—,None,Aggregation key
+ACCOUNT_ID,TEXT,ACCOUNT_ID,SLV_USER_FIRST_ACTIVE,—,—,DIRECT_MATCH,High,Column name and data type identical; dimension key,—,—,None,Dimension key
+ACCOUNT_ID,TEXT,ACCOUNT_ID,SLV_WEEKLY_METRICS,—,—,DIRECT_MATCH,High,Column name and data type identical; aggregation key,—,—,None,Aggregation key
+ENGAGEMENT_ID,TEXT,ENGAGEMENT_ID,SLV_COMBINED_CHANNELS,—,—,DIRECT_MATCH,High,Column name and data type identical; distinct values confirmed,—,—,None,Primary key match
+AGENT_ID,TEXT,USER_ID,SLV_COMBINED_CHANNELS,—,—,SEMANTIC_MATCH,Medium,"Semantic equivalence: AGENT_ID in FTL represents user identity; distinct count match (25 agents = 25 users)",BR-001,—,AGENT_ID AS USER_ID,Assumption: agents are users
+AGENT_ID,TEXT,USER_ID,SLV_ROLL_29_DAY_USAGE,—,—,SEMANTIC_MATCH,Medium,Semantic equivalence: AGENT_ID represents user in usage context,BR-001,—,AGENT_ID AS USER_ID,Assumption: agents are users
+AGENT_ID,TEXT,USER_ID,SLV_USAGE_MASTER,—,—,SEMANTIC_MATCH,Medium,Semantic equivalence: AGENT_ID represents user in daily usage context,BR-001,—,AGENT_ID AS USER_ID,Assumption: agents are users
+AGENT_ID,TEXT,USER_ID,SLV_USER_FIRST_ACTIVE,—,—,SEMANTIC_MATCH,Medium,Semantic equivalence: AGENT_ID represents user for first-active tracking,BR-001,—,AGENT_ID AS USER_ID,Assumption: agents are users
+DIRECTION,TEXT,DIRECTION,SLV_COMBINED_CHANNELS,—,—,PARTIAL_MATCH,High,"FTL values confirmed: Inbound, Outbound; PI values: INBOUND, OUTBOUND (uppercase)",BR-002,—,UPPER(DIRECTION),Case normalization required
+MODALITY,TEXT,MODALITY,SLV_COMBINED_CHANNELS,—,—,DIRECT_MATCH,Medium,"FTL values: SMS, Email, Chat; PI values: Chat, Phone, SMS (mixed case, overlapping values)",BR-003,—,UPPER(MODALITY),Case normalization recommended
+CHANNEL,TEXT,CHANNEL,SLV_COMBINED_CHANNELS,—,—,PARTIAL_MATCH,Medium,"FTL values: Video, Phone; PI has 5 distinct values (EMAIL, VIDEO, PHONE, etc.) indicating FTL subset",BR-004,—,"COALESCE(UPPER(CHANNEL), UPPER(MODALITY))",Combine channel dimensions
+PHONE_SESSIONS,NUMBER,PHONE_SESSIONS,SLV_USAGE_MASTER,—,—,DIRECT_MATCH,High,Column name and data type identical; confirmed via profile,—,—,None,Direct metric match
+INBOUND_PHONE_MS,NUMBER,DURATION_SEC,SLV_COMBINED_CHANNELS,—,—,UNIT_CHANGE,Medium,"FTL in milliseconds, PI in seconds; conversion factor 1000 confirmed via sample value comparison",BR-005,—,INBOUND_PHONE_MS / 1000,Milliseconds to seconds
+INBOUND_PHONE_MS,NUMBER,PHONE_USAGE,SLV_CONSOLIDATED_USAGE,—,—,UNIT_CHANGE,Medium,"FTL in milliseconds, PI in minutes (based on sample values 7.76, 1.17 indicating minute scale)",BR-006,—,INBOUND_PHONE_MS / 60000,Milliseconds to minutes
+INBOUND_PHONE_MS,NUMBER,WEEKLY_PHONE_USAGE,SLV_ROLL_29_DAY_USAGE,—,—,UNIT_CHANGE,Medium,"FTL in milliseconds, PI in minutes",BR-006,—,INBOUND_PHONE_MS / 60000,Milliseconds to minutes
+INBOUND_PHONE_MS,NUMBER,INBOUND_PHONE_MINS,SLV_USAGE_MASTER,—,—,UNIT_CHANGE,High,"FTL in milliseconds, PI column name explicitly indicates minutes",BR-006,—,INBOUND_PHONE_MS / 60000,Milliseconds to minutes
+CLIENT_TYPE,TEXT,—,—,—,—,NEW_CAPABILITY,High,"FTL provides client classification (Mobile, Desktop, Web) not present in any PI Silver table",—,—,None,New dimension for device analytics
+OS,TEXT,—,—,—,—,NEW_CAPABILITY,High,FTL provides operating system metadata not present in any PI Silver table,—,—,None,New dimension for platform analytics
+IS_ACTIVE,BOOLEAN,IS_ACTIVE_ACCOUNT,SLV_CONSOLIDATED_USAGE,—,—,SEMANTIC_MATCH,Medium,FTL IS_ACTIVE (boolean) maps to PI IS_ACTIVE_ACCOUNT; semantic equivalence assumed based on context,BR-007,—,IS_ACTIVE AS IS_ACTIVE_ACCOUNT,Assumption: activity flag same meaning
+IS_ACTIVE,BOOLEAN,IS_ACTIVE_ACCOUNT,SLV_DAILY_METRICS,—,—,SEMANTIC_MATCH,Medium,FTL IS_ACTIVE maps to IS_ACTIVE_ACCOUNT at account level,BR-007,—,IS_ACTIVE AS IS_ACTIVE_ACCOUNT,Assumption: activity flag same meaning
+IS_ACTIVE,BOOLEAN,IS_ACTIVE_ACCOUNT,SLV_MONTHLY_METRICS,—,—,SEMANTIC_MATCH,Medium,FTL IS_ACTIVE maps to IS_ACTIVE_ACCOUNT at account level,BR-007,—,IS_ACTIVE AS IS_ACTIVE_ACCOUNT,Assumption: activity flag same meaning
+IS_ACTIVE,BOOLEAN,IS_ACTIVE_ACCOUNT,SLV_WEEKLY_METRICS,—,—,SEMANTIC_MATCH,Medium,FTL IS_ACTIVE maps to IS_ACTIVE_ACCOUNT at account level,BR-007,—,IS_ACTIVE AS IS_ACTIVE_ACCOUNT,Assumption: activity flag same meaning
+CLUSTER,TEXT,—,—,—,—,NEW_CAPABILITY,Medium,"FTL provides cloud cluster identifier (us-east-1, eu-central-1, ap-south-1) not in PI Silver; potential source for REGION mapping if lookup table exists",—,—,None,Could map to REGION via lookup
+DATA_DATE,TEXT,START_DATE,SLV_COMBINED_CHANNELS,—,—,TYPE_CHANGE,Low,"FTL has TEXT date '5/29/26 13:01', PI requires DATE; parsing required with format inference",BR-008,—,"TRY_TO_DATE(DATA_DATE, 'M/D/YY H:MI')",[LOW CONFIDENCE] Format assumption
+DATA_DATE,TEXT,DATE,SLV_USAGE_MASTER,—,—,TYPE_CHANGE,Low,"FTL has TEXT date, PI requires DATE type",BR-008,—,"TRY_TO_DATE(DATA_DATE, 'M/D/YY H:MI')",[LOW CONFIDENCE] Format assumption
+DATA_DATE,TEXT,REPORT_DATE,SLV_ACCT_FIRST_ACTIVE,—,—,TYPE_CHANGE,Low,"FTL has TEXT date, PI requires DATE type",BR-008,—,"TRY_TO_DATE(DATA_DATE, 'M/D/YY H:MI')",[LOW CONFIDENCE] Format assumption
+DATA_DATE,TEXT,REPORT_DATE,SLV_CONSOLIDATED_USAGE,—,—,TYPE_CHANGE,Low,"FTL has TEXT date, PI requires DATE type",BR-008,—,"TRY_TO_DATE(DATA_DATE, 'M/D/YY H:MI')",[LOW CONFIDENCE] Format assumption
+DATA_DATE,TEXT,REPORT_DATE,SLV_DAILY_METRICS,—,—,TYPE_CHANGE,Low,"FTL has TEXT date, PI requires DATE type",BR-008,—,"TRY_TO_DATE(DATA_DATE, 'M/D/YY H:MI')",[LOW CONFIDENCE] Format assumption
+DATA_DATE,TEXT,REPORT_DATE,SLV_MONTHLY_METRICS,—,—,TYPE_CHANGE,Low,"FTL has TEXT date, PI requires DATE type",BR-008,—,"TRY_TO_DATE(DATA_DATE, 'M/D/YY H:MI')",[LOW CONFIDENCE] Format assumption
+DATA_DATE,TEXT,REPORT_DATE,SLV_ROLL_29_DAY_USAGE,—,—,TYPE_CHANGE,Low,"FTL has TEXT date, PI requires DATE type",BR-008,—,"TRY_TO_DATE(DATA_DATE, 'M/D/YY H:MI')",[LOW CONFIDENCE] Format assumption
+DATA_DATE,TEXT,REPORT_DATE,SLV_USER_ACTIVE_DAYS,—,—,TYPE_CHANGE,Low,"FTL has TEXT date, PI requires DATE type",BR-008,—,"TRY_TO_DATE(DATA_DATE, 'M/D/YY H:MI')",[LOW CONFIDENCE] Format assumption
+DATA_DATE,TEXT,REPORT_DATE,SLV_WEEKLY_METRICS,—,—,TYPE_CHANGE,Low,"FTL has TEXT date, PI requires DATE type",BR-008,—,"TRY_TO_DATE(DATA_DATE, 'M/D/YY H:MI')",[LOW CONFIDENCE] Format assumption
+DATA_DATE,TEXT,ACCOUNT_FIRST_ACTIVE,SLV_ACCT_FIRST_ACTIVE,—,—,GRAIN_CHANGE,Low,FTL DATA_DATE is snapshot date; ACCOUNT_FIRST_ACTIVE requires MIN(date) per account from historical data,BR-009,GAP-008,MIN(TRY_TO_DATE(DATA_DATE)) OVER (PARTITION BY ACCOUNT_ID),[LOW CONFIDENCE] Requires historical data
+DATA_DATE,TEXT,ACCOUNT_FIRST_ACTIVE,SLV_USAGE_MASTER,—,—,GRAIN_CHANGE,Low,FTL DATA_DATE is snapshot date; ACCOUNT_FIRST_ACTIVE requires MIN(date) per account from historical data,BR-009,GAP-008,MIN(TRY_TO_DATE(DATA_DATE)) OVER (PARTITION BY ACCOUNT_ID),[LOW CONFIDENCE] Requires historical data
+DATA_DATE,TEXT,USER_FIRST_ACTIVE,SLV_USER_FIRST_ACTIVE,—,—,GRAIN_CHANGE,Low,FTL DATA_DATE is snapshot date; USER_FIRST_ACTIVE requires MIN(date) per user from historical data,BR-010,GAP-008,MIN(TRY_TO_DATE(DATA_DATE)) OVER (PARTITION BY AGENT_ID),[LOW CONFIDENCE] Requires historical data
+DATA_DATE,TEXT,USER_FIRST_ACTIVE,SLV_USAGE_MASTER,—,—,GRAIN_CHANGE,Low,FTL DATA_DATE is snapshot date; USER_FIRST_ACTIVE requires MIN(date) per user from historical data,BR-010,GAP-008,MIN(TRY_TO_DATE(DATA_DATE)) OVER (PARTITION BY AGENT_ID),[LOW CONFIDENCE] Requires historical data
+—,—,ENGAGEMENT_STATUS,SLV_COMBINED_CHANNELS,—,—,GAP,High,"No column in FTL tracks engagement outcome (Missed/Answered/Resolved)",BR-011,GAP-001,NULL AS ENGAGEMENT_STATUS -- GAP ID: GAP-001,Requires BDP to add field
+—,—,SLA_ACHIEVED,SLV_COMBINED_CHANNELS,—,—,GAP,High,No column in FTL tracks SLA compliance,BR-012,GAP-002,NULL AS SLA_ACHIEVED -- GAP ID: GAP-002,Requires BDP to add SLA logic
+—,—,SOURCE_TABLE,SLV_COMBINED_CHANNELS,—,—,GAP,High,FTL is single source; PI tracks multi-source lineage,BR-013,GAP-014,'BRZ_FTL_AGENT_BASE_AGG' AS SOURCE_TABLE -- GAP ID: GAP-014,Hardcode constant
+—,—,PRODUCT_NAME,SLV_CONSOLIDATED_USAGE,—,—,GAP,High,FTL has no product dimension,BR-014,GAP-015,'ZCC Platform' AS PRODUCT_NAME -- GAP ID: GAP-015,Hardcode constant
+—,—,WINDOW,SLV_CONSOLIDATED_USAGE,—,—,GAP,High,"FTL has no windowing dimension (R1/R7/R28); requires date-based lookback logic",BR-015,GAP-003,NULL AS WINDOW -- GAP ID: GAP-003,Implement windowing in Silver
+—,—,WINDOW,SLV_DAILY_METRICS,—,—,GAP,High,FTL has no windowing dimension; requires date-based lookback logic,BR-015,GAP-003,NULL AS WINDOW -- GAP ID: GAP-003,Implement windowing in Silver
+—,—,WINDOW,SLV_MONTHLY_METRICS,—,—,GAP,High,FTL has no windowing dimension; requires date-based lookback logic,BR-015,GAP-003,NULL AS WINDOW -- GAP ID: GAP-003,Implement windowing in Silver
+—,—,WINDOW,SLV_WEEKLY_METRICS,—,—,GAP,High,FTL has no windowing dimension; requires date-based lookback logic,BR-015,GAP-003,NULL AS WINDOW -- GAP ID: GAP-003,Implement windowing in Silver
+—,—,ACTIVE_USERS,SLV_CONSOLIDATED_USAGE,—,—,GAP,Medium,FTL has no pre-aggregated user count; requires aggregation,BR-016,GAP-013,COUNT(DISTINCT AGENT_ID) AS ACTIVE_USERS -- GAP ID: GAP-013,Derive in Silver aggregation
+—,—,ACTIVE_USERS,SLV_DAILY_METRICS,—,—,GAP,Medium,FTL has no pre-aggregated user count; requires aggregation,BR-016,GAP-013,COUNT(DISTINCT AGENT_ID) AS ACTIVE_USERS -- GAP ID: GAP-013,Derive in Silver aggregation
+—,—,ACTIVE_USERS,SLV_MONTHLY_METRICS,—,—,GAP,Medium,FTL has no pre-aggregated user count; requires aggregation,BR-016,GAP-013,COUNT(DISTINCT AGENT_ID) AS ACTIVE_USERS -- GAP ID: GAP-013,Derive in Silver aggregation
+—,—,ACTIVE_USERS,SLV_WEEKLY_METRICS,—,—,GAP,Medium,FTL has no pre-aggregated user count; requires aggregation,BR-016,GAP-013,COUNT(DISTINCT AGENT_ID) AS ACTIVE_USERS -- GAP ID: GAP-013,Derive in Silver aggregation
+—,—,CHAT_USAGE,SLV_DAILY_METRICS,—,—,GAP,High,FTL has MODALITY='Chat' but no chat session duration/count metrics,BR-017,GAP-004,NULL AS CHAT_USAGE -- GAP ID: GAP-004,Requires BDP to add chat metrics
+—,—,CHAT_USAGE,SLV_WEEKLY_METRICS,—,—,GAP,High,FTL has MODALITY='Chat' but no chat session duration/count metrics,BR-017,GAP-004,NULL AS CHAT_USAGE -- GAP ID: GAP-004,Requires BDP to add chat metrics
+—,—,DAILY_CHAT_USAGE,SLV_ROLL_29_DAY_USAGE,—,—,GAP,High,FTL has MODALITY='Chat' but no chat session duration/count metrics,BR-017,GAP-004,NULL AS DAILY_CHAT_USAGE -- GAP ID: GAP-004,Requires BDP to add chat metrics
+—,—,CHAT_SESSIONS,SLV_USAGE_MASTER,—,—,GAP,High,FTL has MODALITY='Chat' but no discrete session count,BR-018,GAP-011,NULL AS CHAT_SESSIONS -- GAP ID: GAP-011,Requires BDP to add session count
+—,—,VIDEO_USAGE,SLV_MONTHLY_METRICS,—,—,GAP,High,FTL has CHANNEL='Video' but no video session duration/count metrics,BR-019,GAP-005,NULL AS VIDEO_USAGE -- GAP ID: GAP-005,Requires BDP to add video metrics
+—,—,USERS_ACTIVE_1_DAY,SLV_DAILY_METRICS,—,—,GAP,High,FTL has no user activity bucketing; requires historical activity log,BR-020,GAP-009,NULL AS USERS_ACTIVE_1_DAY -- GAP ID: GAP-009,Requires historical activity tracking
+—,—,USERS_ACTIVE_16PLUS_DAYS,SLV_MONTHLY_METRICS,—,—,GAP,High,FTL has no long-term activity tracking; requires historical activity log,BR-021,GAP-010,NULL AS USERS_ACTIVE_16PLUS_DAYS -- GAP ID: GAP-010,Requires historical activity tracking
+—,—,USERS_ACTIVE_4_7_DAYS,SLV_WEEKLY_METRICS,—,—,GAP,High,FTL has no user activity bucketing; requires historical activity log,BR-022,GAP-009,NULL AS USERS_ACTIVE_4_7_DAYS -- GAP ID: GAP-009,Requires historical activity tracking
+—,—,IS_PAID_USER,SLV_ROLL_29_DAY_USAGE,—,—,GAP,High,FTL has no payment/licensing classification,BR-023,GAP-006,NULL AS IS_PAID_USER -- GAP ID: GAP-006,Join to billing/license table
+—,—,ACTIVE_DAYS_LAST_7,SLV_ROLL_29_DAY_USAGE,—,—,GAP,High,FTL provides daily snapshot but no rolling activity counts,BR-024,GAP-007,NULL AS ACTIVE_DAYS_LAST_7 -- GAP ID: GAP-007,Requires historical activity log
+—,—,ACTIVE_DAYS_LAST_28,SLV_ROLL_29_DAY_USAGE,—,—,GAP,High,FTL provides daily snapshot but no rolling activity counts,BR-024,GAP-007,NULL AS ACTIVE_DAYS_LAST_28 -- GAP ID: GAP-007,Requires historical activity log
+—,—,SLA_ACHIEVED_SESSIONS,SLV_USAGE_MASTER,—,—,GAP,Medium,FTL has no session-level SLA tracking,BR-025,GAP-012,NULL AS SLA_ACHIEVED_SESSIONS -- GAP ID: GAP-012,Requires BDP to add SLA logic
+—,—,REFRESH_TIMESTAMP,SLV_ACCT_FIRST_ACTIVE,—,—,GAP,Low,FTL has no ETL timestamp,BR-026,GAP-016,CURRENT_TIMESTAMP() AS REFRESH_TIMESTAMP -- GAP ID: GAP-016,System-generated
+—,—,REFRESH_TIMESTAMP,SLV_USER_FIRST_ACTIVE,—,—,GAP,Low,FTL has no ETL timestamp,BR-026,GAP-016,CURRENT_TIMESTAMP() AS REFRESH_TIMESTAMP -- GAP ID: GAP-016,System-generated
+—,—,ACTIVE_1_DAY_L7,SLV_USER_ACTIVE_DAYS,—,—,GAP,High,FTL has no user activity segmentation,BR-027,GAP-009,NULL AS ACTIVE_1_DAY_L7 -- GAP ID: GAP-009,Requires historical activity tracking
+—,—,ACTIVE_4_7_DAYS_L7,SLV_USER_ACTIVE_DAYS,—,—,GAP,High,FTL has no user activity segmentation,BR-027,GAP-009,NULL AS ACTIVE_4_7_DAYS_L7 -- GAP ID: GAP-009,Requires historical activity tracking
+—,—,ACTIVE_1_DAY_L28,SLV_USER_ACTIVE_DAYS,—,—,GAP,High,FTL has no user activity segmentation,BR-027,GAP-009,NULL AS ACTIVE_1_DAY_L28 -- GAP ID: GAP-009,Requires historical activity tracking
+—,—,ACTIVE_16PLUS_DAYS_L28,SLV_USER_ACTIVE_DAYS,—,—,GAP,High,FTL has no user activity segmentation,BR-027,GAP-009,NULL AS ACTIVE_16PLUS_DAYS_L28 -- GAP ID: GAP-009,Requires historical activity tracking
