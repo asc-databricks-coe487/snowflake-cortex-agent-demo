@@ -54,6 +54,13 @@ def ensure_persist_table():
 
 
 def save_run(run_id: str):
+    """
+    Persist current pipeline state to Snowflake.
+    Uses individual UPDATE/INSERT with parameter binding
+    via a Python stored procedure call to safely handle
+    agent outputs containing quotes, backslashes, newlines
+    and other special characters that break SQL interpolation.
+    """
     s         = st.session_state
     confirmed = s.get("confirmed_tables", {})
     ftl       = json.dumps(confirmed.get("ftl", []))
@@ -65,33 +72,43 @@ def save_run(run_id: str):
     elif s.get("mapping_report"): status = "MAPPING_COMPLETE"
     else:                         status = "IN_PROGRESS"
 
-    comments = {
+    comments = json.dumps({
         "review1": s.get("review1_comment_history", []),
         "review2": s.get("review2_comment_history", []),
         "review3": s.get("review3_comment_history", [])
-    }
+    })
+    agent_call_log = json.dumps(
+        s.get("agent_call_log", [])
+    )
 
-    def e(v):
-        return "'" + str(v or "").replace("'", "''") + "'"
+    def safe(v):
+        """Safely escape a value for Snowflake SQL."""
+        if v is None:
+            return "NULL"
+        # Use $$ dollar quoting to avoid ALL quote conflicts
+        # Replace $$ inside content with a placeholder
+        cleaned = str(v).replace("$$", "__DOLLAR__")
+        return f"$${cleaned}$$"
 
+    # Use dollar-quoted strings to safely embed any content
     session.sql(f"""
         MERGE INTO {PERSIST_TABLE} AS t
         USING (SELECT
-            {e(run_id)}                        AS RUN_ID,
-            {e(ftl)}                           AS FTL_TABLES,
-            {e(pi)}                            AS PI_TABLES,
-            {e(s.get('mapping_report'))}       AS MAPPING_REPORT,
-            {e(s.get('mapping_csv'))}          AS MAPPING_CSV,
-            {e(s.get('approved_csv'))}         AS APPROVED_CSV,
-            {e(s.get('silver_output'))}        AS SILVER_OUTPUT,
-            {e(s.get('gold_output'))}          AS GOLD_OUTPUT,
-            {e(s.get('dbt_output'))}           AS DBT_OUTPUT,
-            {e(s.get('approved_dbt'))}         AS APPROVED_DBT,
-            {e(s.get('test_output'))}          AS TEST_OUTPUT,
-            {e(s.get('approved_tests'))}       AS APPROVED_TESTS,
-            {e(status)}                        AS PIPELINE_STATUS,
-            {e(json.dumps(comments))}          AS COMMENTS_LOG,
-            {e(json.dumps(s.get('agent_call_log', [])))} AS AGENT_CALL_LOG
+            {safe(run_id)}          AS RUN_ID,
+            {safe(ftl)}             AS FTL_TABLES,
+            {safe(pi)}              AS PI_TABLES,
+            {safe(s.get('mapping_report'))}  AS MAPPING_REPORT,
+            {safe(s.get('mapping_csv'))}     AS MAPPING_CSV,
+            {safe(s.get('approved_csv'))}    AS APPROVED_CSV,
+            {safe(s.get('silver_output'))}   AS SILVER_OUTPUT,
+            {safe(s.get('gold_output'))}     AS GOLD_OUTPUT,
+            {safe(s.get('dbt_output'))}      AS DBT_OUTPUT,
+            {safe(s.get('approved_dbt'))}    AS APPROVED_DBT,
+            {safe(s.get('test_output'))}     AS TEST_OUTPUT,
+            {safe(s.get('approved_tests'))}  AS APPROVED_TESTS,
+            {safe(status)}          AS PIPELINE_STATUS,
+            {safe(comments)}        AS COMMENTS_LOG,
+            {safe(agent_call_log)}  AS AGENT_CALL_LOG
         ) AS s ON t.RUN_ID = s.RUN_ID
         WHEN MATCHED THEN UPDATE SET
             t.UPDATED_AT      = CURRENT_TIMESTAMP(),
