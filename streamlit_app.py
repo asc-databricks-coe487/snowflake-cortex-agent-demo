@@ -953,36 +953,169 @@ with st.sidebar:
     st.header("📂 Run History")
     all_runs = get_all_runs()
     if all_runs:
-        for run in all_runs:
-            rid     = run["RUN_ID"]
-            status  = run["PIPELINE_STATUS"]
-            updated = str(run["UPDATED_AT"])[:16]
-            try:
-                ftl_l = json.loads(run["FTL_TABLES"] or "[]")
-                label = ftl_l[0].split(".")[-1] if ftl_l else "—"
-            except Exception:
-                label = "—"
-            icon = {"COMPLETE": "✅", "TESTS_PENDING": "🧪",
-                    "DBT_PENDING": "⚙️",
-                    "MAPPING_COMPLETE": "📋"}.get(status, "⏳")
-            if st.button(
-                f"{icon} {label} — {updated}",
-                key=f"load_{rid}",
-                help=rid
-            ):
-                for k in [
-                    "confirmed_tables", "mapping_report",
-                    "mapping_csv", "approved_csv",
-                    "silver_output", "gold_output",
-                    "dbt_output", "approved_dbt",
-                    "test_output", "approved_tests",
-                    "review1_comment_history",
-                    "review2_comment_history",
-                    "review3_comment_history"
-                ]:
-                    st.session_state.pop(k, None)
-                if load_run(rid):
+        # ── Delete mode toggle ─────────────────────────────────
+        delete_mode = st.toggle(
+            "🗑️ Delete mode",
+            value=st.session_state.get("delete_mode", False),
+            key="delete_mode_toggle"
+        )
+        st.session_state["delete_mode"] = delete_mode
+
+        if delete_mode:
+            st.caption(
+                "⚠️ Check boxes then click Delete Selected"
+            )
+            # Track which runs are checked for deletion
+            to_delete = []
+            for run in all_runs:
+                rid     = run["RUN_ID"]
+                status  = run["PIPELINE_STATUS"]
+                updated = str(run["UPDATED_AT"])[:16]
+                try:
+                    ftl_l = json.loads(run["FTL_TABLES"] or "[]")
+                    label = ftl_l[0].split(".")[-1] \
+                        if ftl_l else "—"
+                except Exception:
+                    label = "—"
+                icon = {
+                    "COMPLETE":         "✅",
+                    "TESTS_PENDING":    "🧪",
+                    "DBT_PENDING":      "⚙️",
+                    "MAPPING_COMPLETE": "📋"
+                }.get(status, "⏳")
+
+                checked = st.checkbox(
+                    f"{icon} {label} — {updated}",
+                    key=f"del_chk_{rid}",
+                    help=rid
+                )
+                if checked:
+                    to_delete.append(rid)
+
+            if to_delete:
+                st.caption(
+                    f"{len(to_delete)} run(s) selected"
+                )
+                if st.button(
+                    f"🗑️ Delete {len(to_delete)} Run(s)",
+                    type="primary",
+                    key="confirm_delete_btn"
+                ):
+                    # Confirm via session state flag
+                    st.session_state[
+                        "pending_delete"
+                    ] = to_delete
                     st.rerun()
+
+            # ── Confirm delete dialog ──────────────────────────
+            pending = st.session_state.get(
+                "pending_delete", []
+            )
+            if pending:
+                st.warning(
+                    f"⚠️ Permanently delete "
+                    f"**{len(pending)} run(s)**? "
+                    f"This cannot be undone."
+                )
+                cd1, cd2 = st.columns(2)
+                with cd1:
+                    if st.button(
+                        "✅ Yes, Delete",
+                        type="primary",
+                        key="yes_delete"
+                    ):
+                        deleted = 0
+                        for rid in pending:
+                            try:
+                                session.sql(f"""
+                                    DELETE FROM {PERSIST_TABLE}
+                                    WHERE RUN_ID = '{rid}'
+                                """).collect()
+                                deleted += 1
+                                # If active run was deleted,
+                                # clear session
+                                if st.session_state.get(
+                                    "active_run_id"
+                                ) == rid:
+                                    for k in [
+                                        "confirmed_tables",
+                                        "mapping_report",
+                                        "mapping_csv",
+                                        "approved_csv",
+                                        "silver_output",
+                                        "gold_output",
+                                        "dbt_output",
+                                        "approved_dbt",
+                                        "test_output",
+                                        "approved_tests",
+                                        "active_run_id",
+                                        "agent_call_log",
+                                        "run_start_time"
+                                    ]:
+                                        st.session_state.pop(
+                                            k, None
+                                        )
+                            except Exception as e:
+                                st.error(
+                                    f"Failed to delete "
+                                    f"{rid}: {str(e)[:100]}"
+                                )
+                        st.session_state.pop(
+                            "pending_delete", None
+                        )
+                        st.session_state[
+                            "delete_mode"
+                        ] = False
+                        st.success(
+                            f"✅ Deleted {deleted} run(s)"
+                        )
+                        st.rerun()
+                with cd2:
+                    if st.button(
+                        "❌ Cancel",
+                        key="cancel_delete"
+                    ):
+                        st.session_state.pop(
+                            "pending_delete", None
+                        )
+                        st.rerun()
+
+        else:
+            # ── Normal mode — load runs ────────────────────────
+            for run in all_runs:
+                rid     = run["RUN_ID"]
+                status  = run["PIPELINE_STATUS"]
+                updated = str(run["UPDATED_AT"])[:16]
+                try:
+                    ftl_l = json.loads(run["FTL_TABLES"] or "[]")
+                    label = ftl_l[0].split(".")[-1] \
+                        if ftl_l else "—"
+                except Exception:
+                    label = "—"
+                icon = {
+                    "COMPLETE":         "✅",
+                    "TESTS_PENDING":    "🧪",
+                    "DBT_PENDING":      "⚙️",
+                    "MAPPING_COMPLETE": "📋"
+                }.get(status, "⏳")
+                if st.button(
+                    f"{icon} {label} — {updated}",
+                    key=f"load_{rid}",
+                    help=rid
+                ):
+                    for k in [
+                        "confirmed_tables", "mapping_report",
+                        "mapping_csv", "approved_csv",
+                        "silver_output", "gold_output",
+                        "dbt_output", "approved_dbt",
+                        "test_output", "approved_tests",
+                        "review1_comment_history",
+                        "review2_comment_history",
+                        "review3_comment_history"
+                    ]:
+                        st.session_state.pop(k, None)
+                    if load_run(rid):
+                        st.rerun()
     else:
         st.caption("No saved runs yet.")
 
@@ -1784,5 +1917,5 @@ else:
 12. `regression_suite.sql` after every model change
         """)
 
-        # ── Cost Summary -----
+        # ── Cost Summary ───────────────────────────────────────
         show_cost_summary()
