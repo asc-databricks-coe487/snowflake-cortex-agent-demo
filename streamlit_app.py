@@ -535,6 +535,104 @@ def show_cost_summary():
 # Input:  0.000003 credits per token  (~$0.003 / 1K tokens)
 # Output: 0.000015 credits per token  (~$0.015 / 1K tokens)
 # 1 credit ≈ $2 USD (Snowflake standard rate)
+def show_comment_and_rerun(
+    stage_key: str,
+    agent_name: str,
+    output_key: str,
+    prompt_builder,
+    rerun_label: str = "🔁 Submit Comment — Agent will revise"
+):
+    """
+    Renders a comment box after any agent output.
+    If user types a comment and clicks submit:
+      - Comment is saved to history
+      - Agent is re-called with the comment + previous output
+      - Output is updated in session state + saved to Snowflake
+      - GitHub push triggers automatically
+    """
+    st.markdown("---")
+    st.markdown("### 💬 Leave a Comment")
+    st.caption(
+        "Type any correction or instruction below. "
+        "The agent will revise its output based on your feedback. "
+        "Leave blank and move on if you are satisfied."
+    )
+
+    comment = st.text_area(
+        "Your comments / correction instructions",
+        placeholder=(
+            "e.g. 'Change MODALITY classification from "
+            "DIRECT_MATCH to PARTIAL_MATCH' or "
+            "'The Silver model is missing the CLUSTER_RAW column'"
+        ),
+        height=100,
+        key=f"{stage_key}_comment_input"
+    )
+
+    # Show comment history if any previous rounds
+    history_key = f"{stage_key}_comment_history"
+    history     = st.session_state.get(history_key, [])
+    if history:
+        with st.expander(
+            f"📝 Comment History ({len(history)} round(s))",
+            expanded=False
+        ):
+            for i, h in enumerate(history):
+                st.info(f"**Round {i + 1}:** {h}")
+
+    if st.button(
+        rerun_label,
+        disabled=not comment.strip(),
+        key=f"{stage_key}_comment_btn"
+    ):
+        # Save to history
+        history.append(comment.strip())
+        st.session_state[history_key] = history
+
+        # Build revised prompt
+        current_output = st.session_state.get(output_key, "")
+        prompt         = prompt_builder(
+            comment.strip(), current_output
+        )
+
+        with st.spinner(
+            f"🤖 {agent_name} is revising based on "
+            f"your comment..."
+        ):
+            st.session_state["current_step"] = (
+                f"{stage_key} revision"
+            )
+            revised = call_agent(agent_name, prompt)
+
+        # Update output
+        st.session_state[output_key] = revised
+
+        # If dbt — keep combined dbt_output in sync
+        if output_key == "silver_output":
+            st.session_state["dbt_output"] = (
+                revised + "\n\n---\n\n"
+                + st.session_state.get("gold_output", "")
+            )
+        if output_key == "gold_output":
+            st.session_state["dbt_output"] = (
+                st.session_state.get("silver_output", "")
+                + "\n\n---\n\n" + revised
+            )
+
+        # Re-extract CSV if mapping report was revised
+        if output_key == "mapping_report":
+            csv_t = extract_csv(revised)
+            if csv_t:
+                st.session_state["mapping_csv"] = csv_t
+
+        save_run(st.session_state.get("active_run_id", ""))
+        st.success(
+            "✅ Agent revised the output. "
+            "Review below and approve or comment again."
+        )
+        st.rerun()
+
+
 CREDITS_PER_INPUT_TOKEN  = 0.000003
 CREDITS_PER_OUTPUT_TOKEN = 0.000015
 CHARS_PER_TOKEN          = 4  # rough approximation
@@ -1136,6 +1234,42 @@ else:
             "ftl_mapping_report.md", "text/markdown"
         )
 
+        # ── Comment section — Agent 1 ──────────────────────────
+        show_comment_and_rerun(
+            stage_key  = "agent1",
+            agent_name = AGENT_1,
+            output_key = "mapping_report",
+            prompt_builder = lambda comment, current: f"""
+                You previously produced a mapping analysis report.
+                The reviewer has the following comments.
+                Please revise accordingly.
+
+                REVIEWER COMMENTS:
+                {comment}
+
+                YOUR PREVIOUS REPORT:
+                {trim(current, 6000)}
+
+                SOURCE FTL TABLES:
+                {ftl_str}
+
+                TARGET PI TABLES:
+                {pi_str}
+
+                Instructions:
+                - Apply ONLY the changes in the comments
+                - Keep everything else exactly as it was
+                - Maintain all GAP IDs and BR IDs unless
+                  the comment changes them
+                - Reproduce the full revised report with
+                  updated mapping CSV at the end
+            """,
+            rerun_label = (
+                "🔁 Submit Comment — "
+                "Agent 1 will revise mapping"
+            )
+        )
+
         if not st.session_state.get("mapping_csv"):
             csv_t = extract_csv(st.session_state["mapping_report"])
             if csv_t:
@@ -1287,6 +1421,36 @@ else:
                 st.session_state["silver_output"].encode(),
                 "ftl_silver_dbt_model.md", "text/markdown"
             )
+
+            # ── Comment section — Agent 2 Silver ──────────────
+            show_comment_and_rerun(
+                stage_key  = "agent2_silver",
+                agent_name = AGENT_2,
+                output_key = "silver_output",
+                prompt_builder = lambda comment, current: f"""
+                    You previously generated a dbt Silver model.
+                    The reviewer has the following comments.
+                    Please revise accordingly.
+
+                    REVIEWER COMMENTS:
+                    {comment}
+
+                    YOUR PREVIOUS SILVER MODEL:
+                    {trim(current, 6000)}
+
+                    APPROVED MAPPING CSV:
+                    {trim(st.session_state.get('approved_csv',''), 3000)}
+
+                    Instructions:
+                    - Apply ONLY the changes in the comments
+                    - Keep all BR IDs and GAP ID comments
+                    - Maintain repo naming: slv_ prefix,
+                      models/silver/ path, schema="SILVER"
+                    - Reproduce all 4 files completely
+                """,
+                rerun_label = "🔁 Submit Comment — Agent 2 will revise Silver model"
+            )
+
             st.divider()
 
             # ══════════════════════════════════════════════════
@@ -1364,6 +1528,39 @@ else:
                     st.session_state["gold_output"].encode(),
                     "ftl_gold_dbt_model.md", "text/markdown"
                 )
+
+                # ── Comment section — Agent 2 Gold ────────────
+                show_comment_and_rerun(
+                    stage_key  = "agent2_gold",
+                    agent_name = AGENT_2,
+                    output_key = "gold_output",
+                    prompt_builder = lambda comment, current: f"""
+                        You previously generated a dbt Gold model.
+                        The reviewer has the following comments.
+                        Please revise accordingly.
+
+                        REVIEWER COMMENTS:
+                        {comment}
+
+                        YOUR PREVIOUS GOLD MODEL:
+                        {trim(current, 5000)}
+
+                        APPROVED MAPPING CSV:
+                        {trim(st.session_state.get('approved_csv',''), 2000)}
+
+                        SILVER MODEL CONTEXT:
+                        {trim(st.session_state.get('silver_output',''), 2000)}
+
+                        Instructions:
+                        - Apply ONLY the changes in the comments
+                        - Keep all BR IDs and GAP ID comments
+                        - Maintain repo naming: gld_ prefix,
+                          models/gold/ path, schema="GOLD"
+                        - Reproduce both files completely
+                    """,
+                    rerun_label = "🔁 Submit Comment — Agent 2 will revise Gold model"
+                )
+
                 st.divider()
 
                 # ══════════════════════════════════════════════
@@ -1471,6 +1668,40 @@ else:
                 st.session_state["test_output"].encode(),
                 "ftl_test_suite.md", "text/markdown"
             )
+
+            # ── Comment section — Agent 3 ──────────────────────
+            show_comment_and_rerun(
+                stage_key  = "agent3",
+                agent_name = AGENT_3,
+                output_key = "test_output",
+                prompt_builder = lambda comment, current: f"""
+                    You previously generated a test suite.
+                    The reviewer has the following comments.
+                    Please revise accordingly.
+
+                    REVIEWER COMMENTS:
+                    {comment}
+
+                    YOUR PREVIOUS TEST SUITE:
+                    {trim(current, 5000)}
+
+                    APPROVED MAPPING CSV:
+                    {trim(st.session_state.get('approved_csv',''), 2000)}
+
+                    APPROVED DBT CODE:
+                    {trim(st.session_state.get('approved_dbt',''), 2000)}
+
+                    Instructions:
+                    - Apply ONLY the changes in the comments
+                    - Keep all BR IDs and GAP IDs consistent
+                    - Maintain test naming:
+                      test_unit_<BR_ID>_<column>
+                      test_gap_<GAP_ID>_<col>_is_null
+                    - Reproduce all 6 files completely
+                """,
+                rerun_label = "🔁 Submit Comment — Agent 3 will revise tests"
+            )
+
             st.divider()
 
             # ══════════════════════════════════════════════════
@@ -1553,5 +1784,5 @@ else:
 12. `regression_suite.sql` after every model change
         """)
 
-        # ── Cost Summary ---
+        # ── Cost Summary ───────────────────────────────────────
         show_cost_summary()
