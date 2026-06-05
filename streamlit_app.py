@@ -1784,5 +1784,5 @@ else:
 12. `regression_suite.sql` after every model change
         """)
 
-        # ── Cost Summary ───────────────────────────────────────
+        # ── Cost Summary -----
         show_cost_summary()
