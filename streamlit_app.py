@@ -1186,6 +1186,29 @@ if not tables_confirmed:
                 f"**{len(tlist)} tables in "
                 f"`{src_db}.{src_schema}` — check to include:**"
             )
+
+            # ── Select All checkbox ────────────────────────────
+            select_all_src = st.checkbox(
+                "☑ Select All",
+                key="src_select_all",
+                value=st.session_state.get(
+                    "src_select_all_prev", False
+                )
+            )
+            # If Select All toggled, sync all individual boxes
+            if select_all_src != st.session_state.get(
+                "src_select_all_prev", False
+            ):
+                st.session_state["src_select_all_prev"] = \
+                    select_all_src
+                for t in tlist:
+                    st.session_state[
+                        f"src_chk_{t['name']}"
+                    ] = select_all_src
+                st.rerun()
+
+            st.markdown("---")
+
             src_checked = []
             for t in tlist:
                 lbl = f"`{t['name']}`"
@@ -1198,7 +1221,8 @@ if not tables_confirmed:
                         fqn(src_db, src_schema, t["name"])
                     )
             if src_checked:
-                st.caption(f"{len(src_checked)} selected")
+                st.caption(f"{len(src_checked)} of "
+                           f"{len(tlist)} selected")
             if st.button(
                 f"➕ Add {len(src_checked)} Source Table(s)",
                 disabled=not src_checked, key="add_src"
@@ -1208,6 +1232,12 @@ if not tables_confirmed:
                     if t not in cur:
                         cur.append(t)
                 st.session_state["ftl_source_tables"] = cur
+                # Reset select all state after adding
+                st.session_state["src_select_all_prev"] = False
+                for t in tlist:
+                    st.session_state[
+                        f"src_chk_{t['name']}"
+                    ] = False
                 st.rerun()
 
     ftl_added = st.session_state.get("ftl_source_tables", [])
@@ -1251,6 +1281,28 @@ if not tables_confirmed:
                 f"**{len(tlist2)} tables in "
                 f"`{tgt_db}.{tgt_schema}` — check to include:**"
             )
+
+            # ── Select All checkbox ────────────────────────────
+            select_all_tgt = st.checkbox(
+                "☑ Select All",
+                key="tgt_select_all",
+                value=st.session_state.get(
+                    "tgt_select_all_prev", False
+                )
+            )
+            if select_all_tgt != st.session_state.get(
+                "tgt_select_all_prev", False
+            ):
+                st.session_state["tgt_select_all_prev"] = \
+                    select_all_tgt
+                for t in tlist2:
+                    st.session_state[
+                        f"tgt_chk_{t['name']}"
+                    ] = select_all_tgt
+                st.rerun()
+
+            st.markdown("---")
+
             tgt_checked = []
             for t in tlist2:
                 lbl = f"`{t['name']}`"
@@ -1263,7 +1315,8 @@ if not tables_confirmed:
                         fqn(tgt_db, tgt_schema, t["name"])
                     )
             if tgt_checked:
-                st.caption(f"{len(tgt_checked)} selected")
+                st.caption(f"{len(tgt_checked)} of "
+                           f"{len(tlist2)} selected")
             if st.button(
                 f"➕ Add {len(tgt_checked)} Target Table(s)",
                 disabled=not tgt_checked, key="add_tgt"
@@ -1273,6 +1326,12 @@ if not tables_confirmed:
                     if t not in cur:
                         cur.append(t)
                 st.session_state["pi_target_tables"] = cur
+                # Reset select all state after adding
+                st.session_state["tgt_select_all_prev"] = False
+                for t in tlist2:
+                    st.session_state[
+                        f"tgt_chk_{t['name']}"
+                    ] = False
                 st.rerun()
 
     pi_added = st.session_state.get("pi_target_tables", [])
