@@ -1188,24 +1188,25 @@ if not tables_confirmed:
             )
 
             # ── Select All checkbox ────────────────────────────
-            select_all_src = st.checkbox(
+            # Uses a trigger flag so individual checkbox state
+            # is set BEFORE they are rendered — avoids
+            # StreamlitAPIException on post-render state write
+            if st.checkbox(
                 "☑ Select All",
-                key="src_select_all",
-                value=st.session_state.get(
-                    "src_select_all_prev", False
-                )
-            )
-            # If Select All toggled, sync all individual boxes
-            if select_all_src != st.session_state.get(
-                "src_select_all_prev", False
+                key="src_select_all"
             ):
-                st.session_state["src_select_all_prev"] = \
-                    select_all_src
+                # Set all individual keys before rendering them
                 for t in tlist:
-                    st.session_state[
-                        f"src_chk_{t['name']}"
-                    ] = select_all_src
-                st.rerun()
+                    st.session_state.setdefault(
+                        f"src_chk_{t['name']}", True
+                    )
+                    # Force True only if not already set True
+                    if not st.session_state.get(
+                        f"src_chk_{t['name']}", False
+                    ):
+                        st.session_state[
+                            f"src_chk_{t['name']}"
+                        ] = True
 
             st.markdown("---")
 
@@ -1232,12 +1233,6 @@ if not tables_confirmed:
                     if t not in cur:
                         cur.append(t)
                 st.session_state["ftl_source_tables"] = cur
-                # Reset select all state after adding
-                st.session_state["src_select_all_prev"] = False
-                for t in tlist:
-                    st.session_state[
-                        f"src_chk_{t['name']}"
-                    ] = False
                 st.rerun()
 
     ftl_added = st.session_state.get("ftl_source_tables", [])
@@ -1283,23 +1278,17 @@ if not tables_confirmed:
             )
 
             # ── Select All checkbox ────────────────────────────
-            select_all_tgt = st.checkbox(
+            if st.checkbox(
                 "☑ Select All",
-                key="tgt_select_all",
-                value=st.session_state.get(
-                    "tgt_select_all_prev", False
-                )
-            )
-            if select_all_tgt != st.session_state.get(
-                "tgt_select_all_prev", False
+                key="tgt_select_all"
             ):
-                st.session_state["tgt_select_all_prev"] = \
-                    select_all_tgt
                 for t in tlist2:
-                    st.session_state[
-                        f"tgt_chk_{t['name']}"
-                    ] = select_all_tgt
-                st.rerun()
+                    if not st.session_state.get(
+                        f"tgt_chk_{t['name']}", False
+                    ):
+                        st.session_state[
+                            f"tgt_chk_{t['name']}"
+                        ] = True
 
             st.markdown("---")
 
@@ -1326,12 +1315,6 @@ if not tables_confirmed:
                     if t not in cur:
                         cur.append(t)
                 st.session_state["pi_target_tables"] = cur
-                # Reset select all state after adding
-                st.session_state["tgt_select_all_prev"] = False
-                for t in tlist2:
-                    st.session_state[
-                        f"tgt_chk_{t['name']}"
-                    ] = False
                 st.rerun()
 
     pi_added = st.session_state.get("pi_target_tables", [])
