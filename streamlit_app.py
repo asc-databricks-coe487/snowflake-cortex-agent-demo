@@ -47,6 +47,7 @@ def ensure_persist_table():
             APPROVED_TESTS  VARCHAR(16777216),
             PIPELINE_STATUS VARCHAR(50)       DEFAULT 'IN_PROGRESS',
             COMMENTS_LOG    VARCHAR(16777216),
+            AGENT_CALL_LOG  VARCHAR(16777216),
             PRIMARY KEY (RUN_ID)
         )
     """).collect()
@@ -89,7 +90,8 @@ def save_run(run_id: str):
             {e(s.get('test_output'))}          AS TEST_OUTPUT,
             {e(s.get('approved_tests'))}       AS APPROVED_TESTS,
             {e(status)}                        AS PIPELINE_STATUS,
-            {e(json.dumps(comments))}          AS COMMENTS_LOG
+            {e(json.dumps(comments))}          AS COMMENTS_LOG,
+            {e(json.dumps(s.get('agent_call_log', [])))} AS AGENT_CALL_LOG
         ) AS s ON t.RUN_ID = s.RUN_ID
         WHEN MATCHED THEN UPDATE SET
             t.UPDATED_AT      = CURRENT_TIMESTAMP(),
@@ -105,19 +107,20 @@ def save_run(run_id: str):
             t.TEST_OUTPUT     = s.TEST_OUTPUT,
             t.APPROVED_TESTS  = s.APPROVED_TESTS,
             t.PIPELINE_STATUS = s.PIPELINE_STATUS,
-            t.COMMENTS_LOG    = s.COMMENTS_LOG
+            t.COMMENTS_LOG    = s.COMMENTS_LOG,
+            t.AGENT_CALL_LOG  = s.AGENT_CALL_LOG
         WHEN NOT MATCHED THEN INSERT (
             RUN_ID, FTL_TABLES, PI_TABLES,
             MAPPING_REPORT, MAPPING_CSV, APPROVED_CSV,
             SILVER_OUTPUT, GOLD_OUTPUT, DBT_OUTPUT,
             APPROVED_DBT, TEST_OUTPUT, APPROVED_TESTS,
-            PIPELINE_STATUS, COMMENTS_LOG
+            PIPELINE_STATUS, COMMENTS_LOG, AGENT_CALL_LOG
         ) VALUES (
             s.RUN_ID, s.FTL_TABLES, s.PI_TABLES,
             s.MAPPING_REPORT, s.MAPPING_CSV, s.APPROVED_CSV,
             s.SILVER_OUTPUT, s.GOLD_OUTPUT, s.DBT_OUTPUT,
             s.APPROVED_DBT, s.TEST_OUTPUT, s.APPROVED_TESTS,
-            s.PIPELINE_STATUS, s.COMMENTS_LOG
+            s.PIPELINE_STATUS, s.COMMENTS_LOG, s.AGENT_CALL_LOG
         )
     """).collect()
 
@@ -159,6 +162,13 @@ def load_run(run_id: str):
             h = c.get(stage, [])
             if h:
                 st.session_state[f"{stage}_comment_history"] = h
+    except Exception:
+        pass
+    # Restore agent call log so cost summary stays accurate
+    try:
+        call_log_raw = v("AGENT_CALL_LOG")
+        if call_log_raw:
+            st.session_state["agent_call_log"] =                 json.loads(call_log_raw)
     except Exception:
         pass
     st.session_state["active_run_id"] = run_id
@@ -283,39 +293,72 @@ def show_cost_summary():
     run_start = st.session_state.get("run_start_time", datetime.now())
     run_id    = st.session_state.get("active_run_id", "UNKNOWN")
 
-    # ── Section 1: Agent timing (always available immediately) ──
+    # ── Section 1: Per-call cost (immediate, no delay) ──────────
     if call_log:
-        st.subheader("⏱️ Agent Execution Times")
-        st.caption("Recorded live during this run")
+        import pandas as pd
 
-        total_duration = sum(c["duration_s"] for c in call_log)
+        st.subheader("📋 Per-Call Cost Breakdown")
+        st.caption(
+            "Estimated using Snowflake Cortex "
+            "claude-sonnet-4-5 pricing. "
+            "Input: 0.000003 credits/token · "
+            "Output: 0.000015 credits/token · "
+            "1 credit ≈ $2 USD"
+        )
+
+        # ── Top-level summary metrics ──────────────────────────
         total_calls    = len(call_log)
+        total_duration = sum(c.get("duration_s",   0) for c in call_log)
+        total_tokens   = sum(c.get("total_tokens", 0) for c in call_log)
+        total_credits  = sum(c.get("total_credits",0) for c in call_log)
+        total_usd      = sum(c.get("total_usd",    0) for c in call_log)
 
-        m1, m2 = st.columns(2)
+        m1, m2, m3, m4 = st.columns(4)
         with m1:
-            st.metric("Total Agent Calls", total_calls)
+            st.metric("Agent Calls",  total_calls)
         with m2:
             st.metric(
-                "Total Execution Time",
-                f"{total_duration:.1f}s "
+                "Total Time",
+                f"{total_duration:.0f}s "
                 f"({total_duration/60:.1f} min)"
             )
+        with m3:
+            st.metric(
+                "Total Tokens",
+                f"{total_tokens:,}"
+            )
+        with m4:
+            st.metric(
+                "Est. Credits",
+                f"{total_credits:.4f}",
+                help=f"≈ ${total_usd:.4f} USD"
+            )
 
-        # Per-call breakdown table
-        import pandas as pd
-        df_log = pd.DataFrame(call_log)
-        df_log.columns = [
-            "Agent", "Start", "End",
-            "Duration (s)", "Output Chars"
-        ]
+        st.caption(f"💵 Estimated total cost: **${total_usd:.4f} USD**")
+
+        # ── Per-call table ─────────────────────────────────────
+        df_log = pd.DataFrame([{
+            "Step":            c.get("step",         "—"),
+            "Agent":           c.get("agent",        "—"),
+            "Start":           c.get("start",        "—"),
+            "Duration (s)":    c.get("duration_s",    0),
+            "Input Tokens":    c.get("input_tokens",  0),
+            "Output Tokens":   c.get("output_tokens", 0),
+            "Total Tokens":    c.get("total_tokens",  0),
+            "Credits":         c.get("total_credits", 0),
+            "Est. USD":        c.get("total_usd",     0)
+        } for c in call_log])
+
         st.dataframe(df_log, use_container_width=True)
 
-        # Per-agent summary
-        st.markdown("**By Agent:**")
+        # ── Per-agent summary ──────────────────────────────────
+        st.markdown("**Summary by Agent:**")
         summary_df = df_log.groupby("Agent").agg(
-            Calls        = ("Duration (s)", "count"),
-            Total_Dur_s  = ("Duration (s)", "sum"),
-            Avg_Dur_s    = ("Duration (s)", "mean")
+            Calls         = ("Duration (s)",  "count"),
+            Total_Dur_s   = ("Duration (s)",  "sum"),
+            Total_Tokens  = ("Total Tokens",  "sum"),
+            Total_Credits = ("Credits",       "sum"),
+            Total_USD     = ("Est. USD",      "sum")
         ).reset_index()
         st.dataframe(summary_df, use_container_width=True)
 
@@ -384,31 +427,44 @@ def show_cost_summary():
                 )
 
             # Build cost summary for GitHub push
+            if call_log:
+                import pandas as pd
+                df_c = pd.DataFrame([{
+                    "Step":    c.get("step", "—"),
+                    "Agent":   c.get("agent", "—"),
+                    "Dur(s)":  c.get("duration_s", 0),
+                    "Tokens":  c.get("total_tokens", 0),
+                    "Credits": c.get("total_credits", 0),
+                    "USD":     c.get("total_usd", 0)
+                } for c in call_log])
+                t_tok  = df_c["Tokens"].sum()
+                t_cred = df_c["Credits"].sum()
+                t_usd  = df_c["USD"].sum()
+                t_dur  = df_c["Dur(s)"].sum()
+            else:
+                df_c   = None
+                t_tok  = t_cred = t_usd = t_dur = 0
+
             cost_md = f"""# Cost Summary: {run_id}
 
 **Date:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-**Run Start:** {run_start_str}
 
-## Execution Times
-| Agent | Calls | Total (s) | Avg (s) |
-"""
-            if call_log:
-                import pandas as pd
-                df_log = pd.DataFrame(call_log)
-                for agent in df_log["agent"].unique():
-                    rows = df_log[df_log["agent"] == agent]
-                    cost_md += (
-                        f"| {agent} | {len(rows)} | "
-                        f"{rows['duration_s'].sum():.1f} | "
-                        f"{rows['duration_s'].mean():.1f} |\n"
-                    )
-
-            cost_md += f"""
-## Snowflake Credits
+## Total Cost
 | Metric | Value |
 |--------|-------|
-| Total Credits | {total_credits:.6f} |
-| Total Query Time | {total_dur:.1f}s |
+| Total Agent Calls | {len(call_log)} |
+| Total Duration    | {t_dur:.1f}s ({t_dur/60:.1f} min) |
+| Total Tokens      | {int(t_tok):,} |
+| Est. Credits      | {t_cred:.4f} |
+| Est. USD          | ${t_usd:.4f} |
+
+## Per-Call Breakdown
+{df_c.to_markdown(index=False) if df_c is not None else "No data"}
+
+## Snowflake Query Credits
+| Total Credits | Total Time |
+|---------------|------------|
+| {total_credits:.6f} | {total_dur:.1f}s |
 """
             push_output_to_github(
                 run_id,
@@ -474,10 +530,46 @@ def show_cost_summary():
             st.warning(f"Could not fetch: {str(e)[:150]}")
 
 
+# Cortex claude-sonnet-4-5 pricing (Snowflake credits per token)
+# Source: Snowflake Cortex LLM pricing docs
+# Input:  0.000003 credits per token  (~$0.003 / 1K tokens)
+# Output: 0.000015 credits per token  (~$0.015 / 1K tokens)
+# 1 credit ≈ $2 USD (Snowflake standard rate)
+CREDITS_PER_INPUT_TOKEN  = 0.000003
+CREDITS_PER_OUTPUT_TOKEN = 0.000015
+CHARS_PER_TOKEN          = 4  # rough approximation
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate token count from character count."""
+    return max(1, len(text) // CHARS_PER_TOKEN)
+
+
+def estimate_cost(input_tokens: int,
+                  output_tokens: int) -> dict:
+    """Calculate estimated Snowflake credits and USD cost."""
+    input_credits  = input_tokens  * CREDITS_PER_INPUT_TOKEN
+    output_credits = output_tokens * CREDITS_PER_OUTPUT_TOKEN
+    total_credits  = input_credits + output_credits
+    total_usd      = total_credits * 2.0  # $2 per credit
+    return {
+        "input_tokens":   input_tokens,
+        "output_tokens":  output_tokens,
+        "total_tokens":   input_tokens + output_tokens,
+        "input_credits":  round(input_credits,  6),
+        "output_credits": round(output_credits, 6),
+        "total_credits":  round(total_credits,  6),
+        "total_usd":      round(total_usd,       6)
+    }
+
+
 def call_agent(agent_name: str, message: str) -> str:
-    """Call agent and track timing + token usage for cost reporting."""
-    fqn       = f"{DATABASE}.{SCHEMA}.{agent_name}"
-    body      = json.dumps({
+    """
+    Call agent and track timing + token count + estimated cost.
+    Cost is estimated using Cortex pricing for claude-sonnet-4-5.
+    """
+    fqn  = f"{DATABASE}.{SCHEMA}.{agent_name}"
+    body = json.dumps({
         "messages": [{"role": "user",
                       "content": [{"type": "text",
                                    "text": message}]}],
@@ -497,16 +589,36 @@ def call_agent(agent_name: str, message: str) -> str:
         if i.get("type") == "text"
     )
 
-    # Track call in session state for per-run cost summary
+    # Estimate tokens and cost
+    input_tokens  = estimate_tokens(message)
+    output_tokens = estimate_tokens(full_text)
+    cost          = estimate_cost(input_tokens, output_tokens)
+
+    # Accumulate call log — never replace, so re-runs add to total
     call_log = st.session_state.get("agent_call_log", [])
     call_log.append({
-        "agent":      agent_name,
-        "start":      call_start.strftime("%H:%M:%S"),
-        "end":        call_end.strftime("%H:%M:%S"),
-        "duration_s": round(duration_s, 1),
-        "chars_out":  len(full_text)
+        "agent":          agent_name,
+        "step":           st.session_state.get(
+                              "current_step", "unknown"
+                          ),
+        "start":          call_start.strftime("%H:%M:%S"),
+        "end":            call_end.strftime("%H:%M:%S"),
+        "duration_s":     round(duration_s, 1),
+        "input_tokens":   cost["input_tokens"],
+        "output_tokens":  cost["output_tokens"],
+        "total_tokens":   cost["total_tokens"],
+        "total_credits":  cost["total_credits"],
+        "total_usd":      cost["total_usd"]
     })
     st.session_state["agent_call_log"] = call_log
+
+    # Persist immediately so page refresh keeps the log
+    run_id = st.session_state.get("active_run_id", "")
+    if run_id:
+        try:
+            save_run(run_id)
+        except Exception:
+            pass
 
     return full_text
 
@@ -588,6 +700,32 @@ def fqn(db, schema, table):
 # ══════════════════════════════════════════════════════════════
 
 def reset_from_step(step: str):
+    """
+    Clear outputs FROM a given step onwards.
+    Earlier steps are preserved exactly as they were.
+    Agent call log is filtered — keeps calls from
+    preserved steps so total cost stays accurate.
+    """
+    # Which steps' agent calls to KEEP when re-running
+    step_keep_map = {
+        "step1":  [],
+        "step2a": ["Step 1: Mapping"],
+        "step2b": ["Step 1: Mapping", "Step 2a: Silver"],
+        "step3":  [
+            "Step 1: Mapping",
+            "Step 2a: Silver",
+            "Step 2b: Gold"
+        ]
+    }
+    # Filter call log — keep only calls from preserved steps
+    keep_steps   = step_keep_map.get(step, [])
+    existing_log = st.session_state.get("agent_call_log", [])
+    filtered_log = [
+        c for c in existing_log
+        if c.get("step", "") in keep_steps
+    ]
+    st.session_state["agent_call_log"] = filtered_log
+
     clear_map = {
         "step1": [
             "mapping_report", "mapping_csv", "approved_csv",
@@ -758,7 +896,8 @@ with st.sidebar:
             "silver_output", "gold_output", "dbt_output",
             "approved_dbt", "test_output", "approved_tests",
             "active_run_id", "review1_comment_history",
-            "review2_comment_history", "review3_comment_history"
+            "review2_comment_history", "review3_comment_history",
+            "agent_call_log", "run_start_time", "current_step"
         ]:
             st.session_state.pop(k, None)
         st.rerun()
@@ -960,6 +1099,7 @@ else:
             "▶️ Run Mapping Analysis", type="primary"
         ):
             with st.spinner("🤖 Agent 1 running..."):
+                st.session_state["current_step"] = "Step 1: Mapping"
                 result = call_agent(AGENT_1, f"""
                     Comprehensive mapping analysis.
                     SOURCE: {ftl_str}
@@ -1088,6 +1228,7 @@ else:
                 "▶️ Generate Silver DBT Model", type="primary"
             ):
                 with st.spinner("⚙️ Agent 2 — Silver model..."):
+                    st.session_state["current_step"] = "Step 2a: Silver"
                     result = call_agent(AGENT_2, f"""
                         Generate dbt Silver model.
                         TARGET_LAYER = SILVER
@@ -1158,6 +1299,7 @@ else:
                     "▶️ Generate Gold DBT Model", type="primary"
                 ):
                     with st.spinner("⚙️ Agent 2 — Gold model..."):
+                        st.session_state["current_step"] = "Step 2b: Gold"
                         result = call_agent(AGENT_2, f"""
                             Generate dbt Gold model.
                             TARGET_LAYER = GOLD
@@ -1281,6 +1423,7 @@ else:
                 "▶️ Generate Test Cases", type="primary"
             ):
                 with st.spinner("🧪 Agent 3 generating tests..."):
+                    st.session_state["current_step"] = "Step 3: Tests"
                     result = call_agent(AGENT_3, f"""
                         Generate complete test suite.
                         TARGET_LAYER = ALL
