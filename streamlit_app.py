@@ -624,7 +624,7 @@ with st.sidebar:
                 rid    = run["RUN_ID"]
                 status = run["PIPELINE_STATUS"]
                 updated = str(run["UPDATED_AT"])[:16]
-                jira   = run.get("JIRA_TICKET_ID") or ""
+                jira   = run.asDict().get("JIRA_TICKET_ID") or ""
                 try:
                     ftl_l = json.loads(run["FTL_TABLES"] or "[]")
                     label = ftl_l[0].split(".")[-1] if ftl_l else "—"
@@ -670,7 +670,7 @@ with st.sidebar:
                 rid    = run["RUN_ID"]
                 status = run["PIPELINE_STATUS"]
                 updated = str(run["UPDATED_AT"])[:16]
-                jira   = run.get("JIRA_TICKET_ID") or ""
+                jira   = run.asDict().get("JIRA_TICKET_ID") or ""
                 try:
                     ftl_l = json.loads(run["FTL_TABLES"] or "[]")
                     label = ftl_l[0].split(".")[-1] if ftl_l else "—"
