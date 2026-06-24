@@ -198,47 +198,47 @@ def get_all_runs() -> list:
 # JIRA AGENT FUNCTIONS
 # ══════════════════════════════════════════════════════════════
 
-def call_jira_agent(ticket_id: str) -> dict:
-    """Call JIRA_READER_AGENT via Cortex DATA_AGENT_RUN."""
-    fqn  = f"{DATABASE}.{SCHEMA}.{AGENT_0}"
-    body = json.dumps({
-        "messages": [{"role": "user", "content": [{"type": "text",
-            "text": f"Read Jira ticket {ticket_id} and return the structured JSON only. No explanation."}]}],
-        "stream": False
-    })
+def jira_list_epics() -> dict:
+    """Fetch all epics and their child stories from CORTEX project."""
     try:
-        result   = session.sql(
-            f"SELECT SNOWFLAKE.CORTEX.DATA_AGENT_RUN('{fqn}', $${body}$$) AS R"
+        result = session.sql(
+            f"SELECT {DATABASE}.{SCHEMA}.SP_JIRA_LIST_EPICS() AS R"
         ).collect()
-        response = json.loads(result[0]["R"])
-        raw_text = "".join(
-            i.get("text","") for i in response.get("content",[]) if i.get("type")=="text"
-        ).strip()
-        if "```" in raw_text:
-            parts = raw_text.split("```")
-            for p in parts:
-                p = p.strip()
-                if p.startswith("json"): p = p[4:].strip()
-                try:
-                    return json.loads(p)
-                except Exception:
-                    continue
-        return json.loads(raw_text)
+        raw = result[0]["R"]
+        return json.loads(raw) if isinstance(raw, str) else raw
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def jira_read_ticket(ticket_id: str) -> dict:
+    """Read a single Jira ticket directly via UDF — no agent needed."""
+    try:
+        result = session.sql(
+            f"SELECT {DATABASE}.{SCHEMA}.SP_JIRA_READ_TICKET('{ticket_id}') AS R"
+        ).collect()
+        raw = result[0]["R"]
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        return data
     except Exception as e:
         return {"error": str(e)}
 
 
 def call_jira_comment(ticket_id: str, comment: str):
-    """Post pipeline results back to Jira via Agent 0."""
-    fqn  = f"{DATABASE}.{SCHEMA}.{AGENT_0}"
-    body = json.dumps({
-        "messages": [{"role": "user", "content": [{"type": "text",
-            "text": f"Post this comment to Jira ticket {ticket_id} and mark it as Done:\n\n{comment}"}]}],
-        "stream": False
-    })
+    """Post pipeline results back to Jira directly via UDF."""
+    try:
+        safe_comment = comment.replace("'", "''").replace("$$", "__DOLLAR__")
+        session.sql(
+            f"SELECT {DATABASE}.{SCHEMA}.SP_JIRA_POST_COMMENT('{ticket_id}', $${safe_comment}$$) AS R"
+        ).collect()
+    except Exception:
+        pass
+
+
+def call_jira_status(ticket_id: str, status: str):
+    """Transition Jira ticket status directly via UDF."""
     try:
         session.sql(
-            f"SELECT SNOWFLAKE.CORTEX.DATA_AGENT_RUN('{fqn}', $${body}$$) AS R"
+            f"SELECT {DATABASE}.{SCHEMA}.SP_JIRA_UPDATE_STATUS('{ticket_id}', '{status}') AS R"
         ).collect()
     except Exception:
         pass
@@ -695,7 +695,7 @@ with st.sidebar:
                   "test_output","approved_tests","active_run_id",
                   "review1_comment_history","review2_comment_history","review3_comment_history",
                   "agent_call_log","run_start_time","current_step",
-                  "jira_ticket_id","jira_ticket_data","jira_approved"]:
+                  "jira_ticket_id","jira_ticket_data","jira_approved","jira_epics_cache"]:
             st.session_state.pop(k, None)
         st.rerun()
 
@@ -706,45 +706,95 @@ with st.sidebar:
 
 
 # ══════════════════════════════════════════════════════════════
-# STEP J — JIRA EPIC LOADER
+# STEP J — JIRA EPIC LOADER (dropdown browser)
 # ══════════════════════════════════════════════════════════════
 
 st.divider()
 st.header("🔵 Step J — Load from Jira (CORTEX project)")
-st.caption("Enter your Jira epic key. Agent 0 reads the ticket and auto-populates source and target tables.")
+st.caption("Browse all epics and stories from the CORTEX project and select one to load.")
 
-jira_data = st.session_state.get("jira_ticket_data")
+jira_data     = st.session_state.get("jira_ticket_data")
+epics_cache   = st.session_state.get("jira_epics_cache")
 
-if not jira_data:
-    col_j1, col_j2 = st.columns([3,1])
-    with col_j1:
-        jira_input = st.text_input("Jira Epic Key", placeholder="e.g. CORTEX-1", key="jira_key_input")
-    with col_j2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        fetch_btn = st.button("🔍 Fetch from Jira", type="primary", key="fetch_jira_btn")
+if not jira_approved:
 
-    if fetch_btn and jira_input.strip():
-        with st.spinner(f"🤖 JIRA_READER_AGENT fetching {jira_input.strip().upper()}..."):
-            st.session_state["current_step"] = "Step J: Jira Fetch"
-            ticket = call_jira_agent(jira_input.strip().upper())
-        if "error" in ticket:
-            st.error(f"❌ Could not fetch ticket: {ticket['error']}")
-        else:
-            st.session_state["jira_ticket_data"] = ticket
-            st.session_state["jira_ticket_id"]   = ticket.get("ticket_id", jira_input.strip().upper())
-            st.rerun()
+    # ── Load epic list ─────────────────────────────────────────
+    col_load, col_manual = st.columns([2, 1])
+    with col_load:
+        if st.button("🔄 Browse Jira Epics", type="primary", key="browse_jira_btn"):
+            with st.spinner("Loading epics from CORTEX project..."):
+                result = jira_list_epics()
+            if "error" in result:
+                st.error(f"❌ Could not load epics: {result['error']}")
+            else:
+                st.session_state["jira_epics_cache"] = result.get("epics", [])
+                epics_cache = st.session_state["jira_epics_cache"]
+                st.rerun()
+    with col_manual:
+        st.caption("Or skip and select tables manually in Step 0 below.")
 
-    st.caption("No Jira epic? Skip — use Step 0 below to select tables manually.")
+    if epics_cache:
+        epics = epics_cache
 
-else:
-    t   = jira_data
-    tid = st.session_state.get("jira_ticket_id","")
+        # ── Epic dropdown ──────────────────────────────────────
+        st.markdown("---")
+        epic_options = {f"{e['key']} — {e['summary']} [{e['status']}]": e for e in epics}
+        epic_options_list = ["— select an epic —"] + list(epic_options.keys())
 
-    if not jira_approved:
-        st.success(f"✅ Fetched **{tid}** from CORTEX project")
+        selected_epic_label = st.selectbox(
+            "📁 Select Epic",
+            options=epic_options_list,
+            key="jira_epic_select"
+        )
+
+        if selected_epic_label != "— select an epic —":
+            selected_epic = epic_options[selected_epic_label]
+
+            # ── Story dropdown ─────────────────────────────────
+            stories = selected_epic.get("stories", [])
+
+            if stories:
+                story_options = {
+                    f"{s['key']} — {s['summary']} [{s['status']}]": s
+                    for s in stories
+                }
+                story_options_list = ["— view stories (optional) —"] + list(story_options.keys())
+                selected_story_label = st.selectbox(
+                    "📄 Stories under this Epic",
+                    options=story_options_list,
+                    key="jira_story_select"
+                )
+            else:
+                st.caption("No child stories found under this epic.")
+                selected_story_label = "— view stories (optional) —"
+
+            st.markdown("---")
+
+            # ── Load selected epic button ──────────────────────
+            if st.button(
+                f"📥 Load Epic {selected_epic['key']}",
+                type="primary", key="load_epic_btn"
+            ):
+                with st.spinner(f"Reading {selected_epic['key']} from Jira..."):
+                    ticket = jira_read_ticket(selected_epic["key"])
+
+                if "error" in ticket:
+                    st.error(f"❌ Could not fetch ticket: {ticket['error']}")
+                else:
+                    st.session_state["jira_ticket_data"] = ticket
+                    st.session_state["jira_ticket_id"]   = ticket.get("ticket_id", selected_epic["key"])
+                    st.rerun()
+
+    # ── Ticket loaded — show details and approval gate ─────────
+    if jira_data and not jira_approved:
+        t   = jira_data
+        tid = st.session_state.get("jira_ticket_id", "")
+
+        st.markdown("---")
+        st.success(f"✅ Loaded **{tid}** — {t.get('summary','')}")
+
         col_e1, col_e2 = st.columns(2)
         with col_e1:
-            st.markdown(f"**Epic:** {t.get('summary','')}")
             st.markdown(f"**Status:** `{t.get('status','')}`")
             st.markdown(f"**Reporter:** {t.get('reporter','')}")
             st.markdown(f"**Type:** `{t.get('issue_type','')}`")
@@ -752,72 +802,105 @@ else:
             st.markdown(f"**FTL Source:** `{t.get('ftl_source_table','—')}`")
             st.markdown(f"**PI Gold Target:** `{t.get('pi_gold_table','—')}`")
             if t.get("missing_in_ftl"):
-                st.markdown(f"**⚠️ GAP — Missing in FTL:** `{'`, `'.join(t['missing_in_ftl'])}`")
+                st.markdown(
+                    f"**⚠️ GAP — Missing in FTL:** "
+                    f"`{'`, `'.join(t['missing_in_ftl'])}`"
+                )
             if t.get("new_in_ftl"):
-                st.markdown(f"**🆕 New in FTL:** `{'`, `'.join(t['new_in_ftl'])}`")
+                st.markdown(
+                    f"**🆕 New in FTL:** "
+                    f"`{'`, `'.join(t['new_in_ftl'])}`"
+                )
 
-        silver_tables = t.get("target_silver_tables",[])
+        silver_tables = t.get("target_silver_tables", [])
         if silver_tables:
-            with st.expander(f"📋 Target Silver tables from Jira ({len(silver_tables)})", expanded=True):
+            with st.expander(
+                f"📋 Target Silver tables ({len(silver_tables)})",
+                expanded=True
+            ):
                 for tbl in silver_tables:
                     st.markdown(f"• `{tbl}`")
-
-        with st.expander("📄 Full epic description"):
-            st.text(t.get("description",""))
 
         if t.get("subtasks"):
             with st.expander(f"📋 Child stories ({len(t['subtasks'])})"):
                 for s in t["subtasks"]:
-                    icon = "✅" if s["status"]=="Done" else "⏳"
-                    st.markdown(f"{icon} **{s['key']}** — {s['summary']} [`{s['status']}`]")
+                    icon = "✅" if s["status"] == "Done" else "⏳"
+                    st.markdown(
+                        f"{icon} **{s['key']}** — {s['summary']} "
+                        f"[`{s['status']}`]"
+                    )
+
+        with st.expander("📄 Full epic description"):
+            st.text(t.get("description", ""))
 
         st.markdown("---")
-        st.warning("⚠️ Review the epic details above. Approving will auto-populate tables and skip manual selection.")
+        st.warning(
+            "⚠️ Review the epic above. "
+            "Approving auto-populates tables and skips manual selection."
+        )
 
         col_ap, col_cl = st.columns(2)
         with col_ap:
-            if st.button("✅ Approve Epic — Auto-populate & Start Pipeline",
-                         type="primary", key="approve_jira"):
-                ftl_tbl     = t.get("ftl_source_table")
-                silver_tbls = t.get("target_silver_tables",[])
-                pi_tbl      = t.get("pi_gold_table")
+            if st.button(
+                "✅ Approve Epic — Auto-populate & Start Pipeline",
+                type="primary", key="approve_jira"
+            ):
+                ftl_tbl       = t.get("ftl_source_table")
+                silver_tbls   = t.get("target_silver_tables", [])
+                pi_tbl        = t.get("pi_gold_table")
                 target_tables = silver_tbls if silver_tbls else ([pi_tbl] if pi_tbl else [])
 
                 if ftl_tbl and target_tables:
                     st.session_state["ftl_source_tables"] = [ftl_tbl]
                     st.session_state["pi_target_tables"]  = target_tables
-                    st.session_state["confirmed_tables"]  = {"ftl":[ftl_tbl],"pi":target_tables}
-                    st.session_state["jira_approved"]     = True
+                    st.session_state["confirmed_tables"]  = {
+                        "ftl": [ftl_tbl], "pi": target_tables
+                    }
+                    st.session_state["jira_approved"] = True
                     call_jira_comment(
                         tid,
                         f"🤖 AI Pipeline started — Run ID: {active_run_id}\n"
                         f"Source: {ftl_tbl}\n"
-                        f"Targets: {', '.join(target_tables[:3])}{'...' if len(target_tables)>3 else ''}\n"
-                        f"GAP columns noted: {', '.join(t.get('missing_in_ftl',[]) or ['none'])}"
+                        f"Targets: {', '.join(target_tables[:3])}"
+                        f"{'...' if len(target_tables) > 3 else ''}\n"
+                        f"GAP columns: "
+                        f"{', '.join(t.get('missing_in_ftl', []) or ['none'])}"
                     )
+                    call_jira_status(tid, "In Progress")
                     save_run(active_run_id)
                     st.rerun()
                 else:
-                    st.error("Could not parse table names from epic. Check the description format or clear and select manually.")
+                    st.error(
+                        "Could not parse table names from epic description. "
+                        "Check the description format or clear and select manually."
+                    )
 
         with col_cl:
-            if st.button("✕ Clear — select tables manually instead", key="clear_jira"):
-                for k in ["jira_ticket_data","jira_ticket_id","jira_approved"]:
+            if st.button("✕ Clear — select different epic or manual", key="clear_jira"):
+                for k in ["jira_ticket_data", "jira_ticket_id", "jira_approved"]:
                     st.session_state.pop(k, None)
                 st.rerun()
-    else:
-        st.success(
-            f"✅ Jira epic **{tid}** approved | "
-            f"Source → `{t.get('ftl_source_table','—')}` | "
-            f"{len(t.get('target_silver_tables',[]))} Silver targets loaded"
+
+else:
+    # ── Already approved — compact banner ─────────────────────
+    t   = st.session_state.get("jira_ticket_data", {})
+    tid = st.session_state.get("jira_ticket_id", "")
+    st.success(
+        f"✅ Jira epic **{tid}** approved | "
+        f"Source → `{t.get('ftl_source_table', '—')}` | "
+        f"{len(t.get('target_silver_tables', []))} Silver targets loaded"
+    )
+    if t.get("missing_in_ftl"):
+        st.info(
+            f"⚠️ GAP columns noted: "
+            f"`{'`, `'.join(t['missing_in_ftl'])}`"
         )
-        if t.get("missing_in_ftl"):
-            st.info(f"⚠️ GAP columns noted: `{'`, `'.join(t['missing_in_ftl'])}`")
-        if st.button("🔄 Change epic", key="change_jira"):
-            for k in ["jira_ticket_data","jira_ticket_id","jira_approved",
-                      "confirmed_tables","ftl_source_tables","pi_target_tables"]:
-                st.session_state.pop(k, None)
-            st.rerun()
+    if st.button("🔄 Change epic", key="change_jira"):
+        for k in ["jira_ticket_data", "jira_ticket_id", "jira_approved",
+                  "confirmed_tables", "ftl_source_tables", "pi_target_tables",
+                  "jira_epics_cache"]:
+            st.session_state.pop(k, None)
+        st.rerun()
 
 st.divider()
 
