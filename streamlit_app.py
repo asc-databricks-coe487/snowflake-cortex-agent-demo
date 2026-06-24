@@ -308,6 +308,7 @@ def push_run_summary(run_id: str):
 
 def show_cost_summary():
     st.divider()
+    st.markdown('<a id="run-cost-summary"></a>', unsafe_allow_html=True)
     st.header("💰 Run Cost Summary")
     call_log  = st.session_state.get("agent_call_log",[])
     run_start = st.session_state.get("run_start_time", datetime.now())
@@ -545,7 +546,7 @@ def reset_from_step(step: str):
 # PAGE SETUP
 # ══════════════════════════════════════════════════════════════
 
-st.set_page_config(page_title="Medallion Pipeline Rebuild", layout="wide")
+st.set_page_config(page_title="Medallion Pipeline Orchestrator", layout="wide")
 ensure_persist_table()
 
 if "active_run_id" not in st.session_state:
@@ -563,8 +564,47 @@ step3_done       = "test_output"      in st.session_state
 tests_approved   = "approved_tests"   in st.session_state
 jira_approved    = st.session_state.get("jira_approved", False)
 
-st.title("🔷 Medallion Pipeline Rebuild Orchestrator")
+st.title("🔷 Medallion Pipeline Orchestrator")
 st.markdown("**Pipeline:** FTL Bronze → New Silver → New Gold (PI Gold equivalent)")
+
+# ── Quick navigation bar ───────────────────────────────────────
+# Uses anchor links that jump to section headings on the page
+st.markdown("""
+<style>
+.nav-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 0 4px 0;
+    border-bottom: 1px solid #e0e0e0;
+    margin-bottom: 8px;
+}
+.nav-bar a {
+    text-decoration: none;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid #d0d0d0;
+    color: #444;
+    background: #f8f8f8;
+    transition: background 0.15s;
+}
+.nav-bar a:hover { background: #e8f0fe; color: #1a73e8; border-color: #1a73e8; }
+</style>
+<div class="nav-bar">
+  <a href="#step-0-load-from-jira">🔵 Step 0: Jira</a>
+  <a href="#step-1-select-tables">⚙️ Step 1: Tables</a>
+  <a href="#step-2-mapping-gap-analysis">🔍 Step 2: Mapping</a>
+  <a href="#review-1-mapping-csv">✅ Review 1</a>
+  <a href="#step-3a-silver-dbt-model">🥈 Step 3a: Silver</a>
+  <a href="#step-3b-gold-dbt-model">🥇 Step 3b: Gold</a>
+  <a href="#review-2-dbt-code">✅ Review 2</a>
+  <a href="#step-4-test-case-generation">🧪 Step 4: Tests</a>
+  <a href="#review-3-test-suite">✅ Review 3</a>
+  <a href="#run-cost-summary">💰 Cost</a>
+</div>
+""", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -577,14 +617,14 @@ with st.sidebar:
     jira_tid_display = st.session_state.get("jira_ticket_id","—")
     st.caption(f"Jira: `{jira_tid_display}`")
     st.markdown(f"""
-**Jira** — {'✅ Loaded' if jira_approved else '⏳ Pending'}
-**Config** — Tables {'✅' if tables_confirmed else '⏳'}
-**Step 1** — Mapping {'✅' if step1_done else '⏳'}
+**Step 0** — Jira {'✅ Loaded' if jira_approved else '⏳ Pending'}
+**Step 1** — Tables {'✅' if tables_confirmed else '⏳'}
+**Step 2** — Mapping {'✅' if step1_done else '⏳'}
 **Review 1** — {'✅ Approved' if csv_approved else ('⏳ Pending' if step1_done else '🔒')}
-**Step 2a** — Silver {'✅' if step2a_done else ('⏳' if csv_approved else '🔒')}
-**Step 2b** — Gold {'✅' if step2b_done else ('⏳' if step2a_done else '🔒')}
+**Step 3a** — Silver {'✅' if step2a_done else ('⏳' if csv_approved else '🔒')}
+**Step 3b** — Gold {'✅' if step2b_done else ('⏳' if step2a_done else '🔒')}
 **Review 2** — {'✅ Approved' if dbt_approved else ('⏳ Pending' if step2b_done else '🔒')}
-**Step 3** — Tests {'✅' if step3_done else ('⏳' if dbt_approved else '🔒')}
+**Step 4** — Tests {'✅' if step3_done else ('⏳' if dbt_approved else '🔒')}
 **Review 3** — {'✅ Approved' if tests_approved else ('⏳ Pending' if step3_done else '🔒')}
     """)
 
@@ -710,8 +750,9 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════
 
 st.divider()
-st.header("🔵 Step J — Load from Jira (CORTEX project)")
-st.caption("Browse all epics and stories from the CORTEX project and select one to load.")
+st.markdown('<a id="step-0-load-from-jira"></a>', unsafe_allow_html=True)
+st.header("🔵 Step 0: Load from Jira (CORTEX project)")
+st.caption("Browse all epics from the CORTEX project and select one to auto-populate tables.")
 
 jira_data     = st.session_state.get("jira_ticket_data")
 epics_cache   = st.session_state.get("jira_epics_cache")
@@ -909,7 +950,8 @@ st.divider()
 # STEP 0 — TABLE SELECTOR
 # ══════════════════════════════════════════════════════════════
 
-st.header("⚙️ Step 0: Select Tables")
+st.markdown('<a id="step-1-select-tables"></a>', unsafe_allow_html=True)
+st.header("⚙️ Step 1: Select Tables")
 
 if jira_approved and tables_confirmed:
     confirmed = st.session_state["confirmed_tables"]
@@ -1072,7 +1114,8 @@ Track all GAP columns with GAP IDs throughout mapping, DBT, and tests.
     # ══════════════════════════════════════════════════════════
     # STEP 1
     # ══════════════════════════════════════════════════════════
-    st.header("Step 1: Mapping & Gap Analysis")
+    st.markdown('<a id="step-2-mapping-gap-analysis"></a>', unsafe_allow_html=True)
+    st.header("Step 2: Mapping & Gap Analysis")
 
     if not step1_done:
         if st.button("▶️ Run Mapping Analysis", type="primary"):
@@ -1127,6 +1170,7 @@ Track all GAP columns with GAP IDs throughout mapping, DBT, and tests.
         # ══════════════════════════════════════════════════════
         # REVIEW 1
         # ══════════════════════════════════════════════════════
+        st.markdown('<a id="review-1-mapping-csv"></a>', unsafe_allow_html=True)
         st.header("🔍 Review 1: Mapping CSV")
         st.markdown("""
         1. Download CSV — review in Excel
@@ -1179,7 +1223,8 @@ Track all GAP columns with GAP IDs throughout mapping, DBT, and tests.
         # ══════════════════════════════════════════════════════
         # STEP 2a — SILVER
         # ══════════════════════════════════════════════════════
-        st.header("Step 2a: Generate Silver DBT Model")
+        st.markdown('<a id="step-3a-silver-dbt-model"></a>', unsafe_allow_html=True)
+        st.header("Step 3a: Silver DBT Model")
 
         if not step2a_done:
             if st.button("▶️ Generate Silver DBT Model", type="primary"):
@@ -1245,7 +1290,8 @@ Track all GAP columns with GAP IDs throughout mapping, DBT, and tests.
             # ══════════════════════════════════════════════════
             # STEP 2b — GOLD
             # ══════════════════════════════════════════════════
-            st.header("Step 2b: Generate Gold DBT Model")
+            st.markdown('<a id="step-3b-gold-dbt-model"></a>', unsafe_allow_html=True)
+            st.header("Step 3b: Gold DBT Model")
 
             if not step2b_done:
                 if st.button("▶️ Generate Gold DBT Model", type="primary"):
@@ -1313,6 +1359,7 @@ Track all GAP columns with GAP IDs throughout mapping, DBT, and tests.
                 # ══════════════════════════════════════════════
                 # REVIEW 2
                 # ══════════════════════════════════════════════
+                st.markdown('<a id="review-2-dbt-code"></a>', unsafe_allow_html=True)
                 st.header("🔍 Review 2: DBT Code")
                 st.markdown("""
                 1. Download DBT code — review Silver and Gold
@@ -1346,7 +1393,8 @@ Track all GAP columns with GAP IDs throughout mapping, DBT, and tests.
         # ══════════════════════════════════════════════════════
         # STEP 3 — TESTS
         # ══════════════════════════════════════════════════════
-        st.header("Step 3: Test Case Generation")
+        st.markdown('<a id="step-4-test-case-generation"></a>', unsafe_allow_html=True)
+        st.header("Step 4: Test Case Generation")
 
         if not step3_done:
             if st.button("▶️ Generate Test Cases", type="primary"):
@@ -1408,6 +1456,7 @@ Track all GAP columns with GAP IDs throughout mapping, DBT, and tests.
             # ══════════════════════════════════════════════════
             # REVIEW 3
             # ══════════════════════════════════════════════════
+            st.markdown('<a id="review-3-test-suite"></a>', unsafe_allow_html=True)
             st.header("🔍 Review 3: Test Suite")
             st.markdown("""
             1. Download test suite — review all files
